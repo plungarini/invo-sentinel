@@ -67,6 +67,33 @@ export class PositionSync {
 			return;
 		}
 
+		// Cheap, synchronous, no network: if this baseId isn't tracked yet and
+		// another one already owns this exact coin, there's nothing further
+		// worth computing this cycle — bail out before spending any API calls
+		// on equity/prices/positions we'd just discard. This daemon's
+		// per-baseId delta math assumes a tracked baseId owns the WHOLE real
+		// position on a coin, which breaks the moment a second one shares it
+		// (whichever opens second would size its order against an assumed
+		// margin of $0, stacking on top of / netting against the first one's
+		// real, already-tracked exposure) — not currently supported, so this
+		// is flagged rather than silently corrupting either entry's margin.
+		if (!state[baseId]?.ourBaseShortId) {
+			const otherTrackedOnCoin = Object.entries(state).find(([bid, s]) => bid !== baseId && s.coin === coin);
+			if (otherTrackedOnCoin) {
+				log({
+					type: 'existing_position_conflict',
+					reason:
+						'another tracked baseId already owns this coin; cannot safely track a second one on the same coin at once',
+					baseId,
+					coin,
+					trader: investment.owner?.username,
+					alreadyTrackedBaseId: otherTrackedOnCoin[0],
+					fix: `resolve/close the existing tracked position (${otherTrackedOnCoin[0]}) first, e.g. npm run close -- ${coin}`,
+				});
+				return;
+			}
+		}
+
 		const traderLeverage = investment.leverage ?? 1;
 		const leverage = clampLeverage(traderLeverage, risk);
 		const isBuy = investment.directionLong === true;
@@ -90,109 +117,83 @@ export class PositionSync {
 			ownerUsername: investment.owner?.username,
 		};
 
-		// If this is a brand-new baseId (never tracked), figure out whether
-		// it's safe to open/adopt it, given Hyperliquid nets positions by coin
-		// (not by trader):
-		//  - Another baseId already tracks this exact coin → this daemon's
-		//    per-baseId delta math assumes a tracked baseId owns the WHOLE
-		//    real position on that coin, which breaks the moment a second one
-		//    shares it (whichever opens second would size its order against
-		//    an assumed margin of $0, stacking on top of / netting against
-		//    the first one's real, already-tracked exposure). Not currently
-		//    supported; flag it rather than silently corrupting either
-		//    entry's tracked margin.
-		//  - No other baseId tracks it, but a REAL, untracked position already
-		//    exists on this coin (pre-dates the daemon): wrong direction vs.
-		//    it → definitely not this one, skip quietly (some other baseId
-		//    may still be the right one this cycle). Right direction, and no
-		//    other followed trader shares both this coin and this direction →
-		//    unambiguous, auto-adopt immediately. Right direction, but another
-		//    followed trader shares it too → ask Invo's own mimic-tracking
-		//    (mimic-resolver.ts) which trade you actually mimicked, instead of
-		//    guessing. Only flag it if that comes back inconclusive.
+		// No other tracked baseId owns this coin. There may still be a REAL,
+		// untracked position on it that pre-dates the daemon — wrong
+		// direction vs. it → definitely not this one, skip quietly (some
+		// other baseId may still be the right one this cycle). Right
+		// direction, and no other followed trader shares both this coin and
+		// this direction → unambiguous, auto-adopt immediately. Right
+		// direction, but another followed trader shares it too → ask Invo's
+		// own mimic-tracking (mimic-resolver.ts) which trade you actually
+		// mimicked, instead of guessing. Only flag it if that's inconclusive.
 		if (!entry.ourBaseShortId) {
-			const otherTrackedOnCoin = Object.entries(state).find(([bid, s]) => bid !== baseId && s.coin === coin);
-			if (otherTrackedOnCoin) {
-				log({
-					type: 'existing_position_conflict',
-					reason:
-						'another tracked baseId already owns this coin; cannot safely track a second one on the same coin at once',
-					baseId,
-					coin,
-					trader: investment.owner?.username,
-					alreadyTrackedBaseId: otherTrackedOnCoin[0],
-					fix: `resolve/close the existing tracked position (${otherTrackedOnCoin[0]}) first, e.g. npm run close -- ${coin}`,
-				});
-				return;
-			} else {
-				const livePositions = await hl.getPositions();
-				const existing = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
-				if (existing) {
-					const directionMatches = parseFloat(existing.szi) > 0 === isBuy;
+			const livePositions = await hl.getPositions();
+			const existing = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
+			if (existing) {
+				const directionMatches = parseFloat(existing.szi) > 0 === isBuy;
 
-					if (!directionMatches) {
+				if (!directionMatches) {
+					log({
+						type: 'skip',
+						reason: 'untracked live position on this coin is the OPPOSITE direction; not this trade',
+						baseId,
+						coin,
+						liveSize: existing.szi,
+					});
+					return;
+				}
+
+				const sameDirectionRivals = (investmentsByCoin.get(coin) ?? []).filter(
+					(c) => c.baseId !== baseId && c.directionLong === investment.directionLong,
+				);
+
+				let adopt = sameDirectionRivals.length === 0;
+
+				if (!adopt) {
+					const resolution = await resolveMimickedCandidate(invo, [investment, ...sameDirectionRivals]);
+					if (resolution.resolvedBaseId === baseId) {
+						adopt = true;
+						log({ type: 'conflict_resolved', baseId, coin, reason: resolution.reason });
+					} else if (resolution.resolvedBaseId) {
 						log({
 							type: 'skip',
-							reason: 'untracked live position on this coin is the OPPOSITE direction; not this trade',
+							reason: 'Invo mimic-tracking confirms a different baseId owns this position',
 							baseId,
 							coin,
-							liveSize: existing.szi,
+							resolvedBaseId: resolution.resolvedBaseId,
 						});
 						return;
-					}
-
-					const sameDirectionRivals = (investmentsByCoin.get(coin) ?? []).filter(
-						(c) => c.baseId !== baseId && c.directionLong === investment.directionLong,
-					);
-
-					let adopt = sameDirectionRivals.length === 0;
-
-					if (!adopt) {
-						const resolution = await resolveMimickedCandidate(invo, [investment, ...sameDirectionRivals]);
-						if (resolution.resolvedBaseId === baseId) {
-							adopt = true;
-							log({ type: 'conflict_resolved', baseId, coin, reason: resolution.reason });
-						} else if (resolution.resolvedBaseId) {
-							log({
-								type: 'skip',
-								reason: 'Invo mimic-tracking confirms a different baseId owns this position',
-								baseId,
-								coin,
-								resolvedBaseId: resolution.resolvedBaseId,
-							});
-							return;
-						} else {
-							log({
-								type: 'existing_position_conflict',
-								reason: `multiple followed traders hold this coin in the same direction and mimic-tracking couldn't confirm one (${resolution.reason})`,
-								baseId,
-								coin,
-								trader: investment.owner?.username,
-								liveSize: existing.szi,
-								rivalCount: sameDirectionRivals.length,
-								fix: `npm run adopt -- ${baseId} ${coin} ${isBuy ? 'long' : 'short'} ${leverage} <yourMarginUsd>; or close it manually`,
-							});
-							return;
-						}
-					}
-
-					if (adopt) {
-						const price = parseFloat(mids[coin]);
-						const liveSize = Math.abs(parseFloat(existing.szi));
-						entry.marginUsd = price && leverage ? (liveSize * price) / leverage : 0;
-						entry.ourBaseShortId = genBaseShortId();
-						entry.leverage = leverage;
-						entry.isBuy = isBuy;
-						state[baseId] = { ...entry };
+					} else {
 						log({
-							type: 'auto_adopted',
+							type: 'existing_position_conflict',
+							reason: `multiple followed traders hold this coin in the same direction and mimic-tracking couldn't confirm one (${resolution.reason})`,
 							baseId,
 							coin,
 							trader: investment.owner?.username,
 							liveSize: existing.szi,
-							adoptedMarginUsd: entry.marginUsd,
+							rivalCount: sameDirectionRivals.length,
+							fix: `npm run adopt -- ${baseId} ${coin} ${isBuy ? 'long' : 'short'} ${leverage} <yourMarginUsd>; or close it manually`,
 						});
+						return;
 					}
+				}
+
+				if (adopt) {
+					const price = parseFloat(mids[coin]);
+					const liveSize = Math.abs(parseFloat(existing.szi));
+					entry.marginUsd = price && leverage ? (liveSize * price) / leverage : 0;
+					entry.ourBaseShortId = genBaseShortId();
+					entry.leverage = leverage;
+					entry.isBuy = isBuy;
+					state[baseId] = { ...entry };
+					log({
+						type: 'auto_adopted',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						liveSize: existing.szi,
+						adoptedMarginUsd: entry.marginUsd,
+					});
 				}
 			}
 		}
