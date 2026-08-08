@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import type { RiskConfig } from '../types.js';
+import type { StaleEntryConfig } from '../services/stale-entry-policy.js';
 
 export interface AppConfig {
 	invoRefreshToken: string;
 	hlAgentKey: string;
 	walletAddress: string;
 	risk: RiskConfig;
+	staleEntry: StaleEntryConfig;
 	pollIntervalMs: number;
 	logRetentionHours: number;
 	logMaxTotalMb: number;
@@ -52,6 +54,10 @@ export function loadConfig(overrides: { minMarginPct?: number; maxMarginPct?: nu
 			minMarginPct,
 			maxMarginPct,
 			maxLeverage: Number.isFinite(maxLeverageRaw) ? maxLeverageRaw : undefined,
+		},
+		staleEntry: {
+			maxAgeMinutes: parseFloat(process.env.STALE_ENTRY_MAX_AGE_MINUTES ?? '') || 1,
+			maxProfitPct: parseFloat(process.env.STALE_ENTRY_MAX_PROFIT_PCT ?? '') || 1,
 		},
 		pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '', 10) || 5_000,
 		logRetentionHours: parseFloat(process.env.LOG_RETENTION_HOURS ?? '') || 24,

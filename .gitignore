@@ -3,3 +3,4 @@ dist/
 .env
 logs/
 .copy-state.json
+.copy-ignored.json

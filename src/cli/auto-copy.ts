@@ -7,6 +7,7 @@ import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
+import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger } from '../services/logger.js';
 import { StateStore } from '../services/state-store.js';
 
@@ -71,17 +72,29 @@ async function main() {
 
 	const meta = await hl.getMeta();
 	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
-	const sync = new PositionSync({ hl, invo, log, risk: config.risk, dryRun, assetMeta: meta.universe });
+	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, '.copy-ignored.json'), log);
+	const sync = new PositionSync({
+		hl,
+		invo,
+		log,
+		risk: config.risk,
+		staleEntry: config.staleEntry,
+		dryRun,
+		assetMeta: meta.universe,
+	});
 	const poller = new PortfolioPoller(invo, log);
-	const reconciler = new Reconciler(poller, sync, hl, stateStore, log);
+	const reconciler = new Reconciler(poller, sync, hl, stateStore, ignoredStore, log);
 
 	log({
 		type: 'started',
 		minMarginPct: config.risk.minMarginPct * 100,
 		maxMarginPct: config.risk.maxMarginPct * 100,
 		maxLeverage: config.risk.maxLeverage ?? null,
+		staleEntryMaxAgeMinutes: config.staleEntry.maxAgeMinutes,
+		staleEntryMaxProfitPct: config.staleEntry.maxProfitPct,
 		pollIntervalMs: config.pollIntervalMs,
 		trackedPositions: Object.keys(stateStore.load()).length,
+		ignoredTrades: Object.keys(ignoredStore.load()).length,
 		dryRun,
 	});
 

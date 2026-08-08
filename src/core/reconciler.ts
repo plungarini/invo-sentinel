@@ -1,4 +1,5 @@
 import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
+import type { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import type { StateStore } from '../services/state-store.js';
 import type { FollowedPortfolio, OpenInvestment } from '../types.js';
@@ -22,11 +23,13 @@ export class Reconciler {
 		private sync: PositionSync,
 		private hl: HyperliquidClient,
 		private stateStore: StateStore,
+		private ignoredStore: IgnoredTradesStore,
 		private log: Logger,
 	) {}
 
 	async run(): Promise<void> {
 		const state = this.stateStore.load();
+		const ignored = this.ignoredStore.load();
 		const portfolios = await this.poller.fetchFollowedPortfolios();
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];
@@ -61,7 +64,7 @@ export class Reconciler {
 			const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 			for (const investment of investments) {
 				try {
-					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin);
+					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored);
 				} catch (e: any) {
 					this.log({
 						type: 'error',
@@ -72,6 +75,7 @@ export class Reconciler {
 					});
 				}
 				this.stateStore.save(state);
+				this.ignoredStore.save(ignored);
 			}
 
 			// Anything tracked for THIS portfolio that's no longer in its open
@@ -86,6 +90,19 @@ export class Reconciler {
 				}
 				this.stateStore.save(state);
 			}
+
+			// Same cleanup for ignored baseIds: once that investment is gone
+			// from the trader's own open list, the ignore entry has nothing
+			// left to guard against — any future trade from them gets a fresh
+			// baseId anyway.
+			let ignoredChanged = false;
+			for (const [baseId, entry] of Object.entries(ignored)) {
+				if (entry.portfolioId !== portfolio.id) continue;
+				if (openBaseIds.has(baseId)) continue;
+				delete ignored[baseId];
+				ignoredChanged = true;
+			}
+			if (ignoredChanged) this.ignoredStore.save(ignored);
 		}
 	}
 
