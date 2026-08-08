@@ -6,6 +6,7 @@ import { loadConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { createLogger } from '../services/logger.js';
 import { StateStore } from '../services/state-store.js';
 
@@ -48,17 +49,19 @@ async function main() {
 	// (stdout + logs/) and exit non-zero so a process supervisor (pm2,
 	// systemd Restart=always, or scripts/run.sh) can restart clean; safer
 	// than trying to "keep going" after truly unexpected state.
-	process.on('uncaughtException', (err) => {
+	process.on('uncaughtException', async (err) => {
 		log({ type: 'fatal', source: 'uncaughtException', message: err.message, stack: err.stack });
+		await pingFailAwaited(config.healthcheckPingUrl);
 		process.exit(1);
 	});
-	process.on('unhandledRejection', (reason: any) => {
+	process.on('unhandledRejection', async (reason: any) => {
 		log({
 			type: 'fatal',
 			source: 'unhandledRejection',
 			message: reason?.message ?? String(reason),
 			stack: reason?.stack,
 		});
+		await pingFailAwaited(config.healthcheckPingUrl);
 		process.exit(1);
 	});
 
@@ -82,15 +85,20 @@ async function main() {
 		dryRun,
 	});
 
+	pingStart(config.healthcheckPingUrl, log);
 	await reconciler.run();
 	await reconciler.logUntrackedPositions();
+	pingSuccess(config.healthcheckPingUrl, log);
 
 	while (true) {
 		await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+		pingStart(config.healthcheckPingUrl, log);
 		try {
 			await reconciler.run();
+			pingSuccess(config.healthcheckPingUrl, log);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });
+			pingFail(config.healthcheckPingUrl, log);
 		}
 	}
 }
