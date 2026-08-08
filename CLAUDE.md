@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Deterministic, mechanical copy-trading daemon: mirrors every open/adjust/close from every Invo portfolio you follow onto your own Hyperliquid account, clamping your margin per trade into a `[minMarginPct, maxMarginPct]` band of your own equity and capping leverage. **Trades are never skipped, only resized.** No AI/LLM in the decision loop — see the header comment in [src/cli/auto-copy.ts](src/cli/auto-copy.ts).
+Deterministic, mechanical copy-trading daemon: mirrors every open/adjust/close from every Invo portfolio you follow onto your own Hyperliquid account, clamping your margin per trade into a `[minMarginPct, maxMarginPct]` band of your own equity and capping leverage. **Trades are never skipped, only resized** — except one deliberate exception, a stale/already-profitable entry (see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries) below). No AI/LLM in the decision loop — see the header comment in [src/cli/auto-copy.ts](src/cli/auto-copy.ts).
 
 Forked from `AKCodez/invo-copy-trader` (kept: the reverse-engineered Invo/Hyperliquid API surface and HL signing quirks; replaced: the AI decision loop with the mechanical logic here).
 
@@ -42,6 +42,16 @@ Data flows in one direction, one reconcile cycle at a time (`Reconciler.run()`, 
 8. **[src/services/state-store.ts](src/services/state-store.ts)** — synchronous JSON persistence of `PositionStateMap` to `.copy-state.json`, keyed by trader `baseId`. Saved after every order attempt, not batched.
 9. **[src/services/logger.ts](src/services/logger.ts)** — JSON-line logger to `logs/<name>-YYYY-MM-DD.log` + stdout, self-enforcing retention (`LOG_RETENTION_HOURS`) and total-size cap (`LOG_MAX_TOTAL_MB`, oldest evicted first).
 10. **[src/services/healthcheck.ts](src/services/healthcheck.ts)** — optional `HEALTHCHECK_PING_URL` pings (`/start` + success/`fail`, e.g. healthchecks.io) around each reconcile cycle. Fire-and-forget by design, never awaited from the main loop — a slow/unreachable monitor must never delay trading. The one exception is `pingFailAwaited`, used only from the fatal crash handlers with a short bounded timeout, since a true fire-and-forget ping there would very likely get killed by `process.exit()` before it left the machine.
+11. **[src/services/stale-entry-policy.ts](src/services/stale-entry-policy.ts)** — pure functions, no I/O: `isStaleProfitableEntry`, `computeInvestmentPnlPercent`. The one deliberate exception to risk-policy's "never reject, only resize": a trade already old and already meaningfully profitable by the time it's about to be opened fresh gets skipped instead.
+12. **[src/services/ignored-trades-store.ts](src/services/ignored-trades-store.ts)** — synchronous JSON persistence of `IgnoredTradesMap` to `.copy-ignored.json`, separate from `.copy-state.json` on purpose: these baseIds were never opened, so they must stay out of the close-detection loop in `Reconciler.run()`, which issues real Hyperliquid closes for anything tracked but no longer in a trader's open list.
+
+### Skipping stale, already-profitable entries
+
+Right before `PositionSync.openOrAdjust` would place a genuinely brand-new order (no real position to adopt, nothing tracked yet for this `baseId`), it checks `isStaleProfitableEntry(investment, staleEntry)`: if the trader's own investment has been open longer than `STALE_ENTRY_MAX_AGE_MINUTES` **and** its own leveraged PnL% already exceeds `STALE_ENTRY_MAX_PROFIT_PCT`, the open is skipped and the `baseId` is written to `IgnoredTradesMap` instead — permanently, for the lifetime of that investment; never retried, never reconsidered even if its PnL later dips back under the threshold.
+
+This exists specifically for the case where a same-coin conflict (above) clears: trader A's tracked investment closes, freeing the coin, and trader B's investment — which had been sitting there flagged as a conflict the whole time, however old — would otherwise get opened immediately at 0% PnL and full size. That's not mirroring B's trade; it's a new bet wearing B's sizing. The same check also guards the plain case of an investment that's simply already old and profitable the first time this daemon ever sees it (e.g. on startup backfill).
+
+`Reconciler.run()` clears an ignored entry the moment that `baseId` disappears from the trader's own open-investments list (mirroring the tracked-state close-detection loop) — a future trade from the same trader gets a fresh `baseId` regardless, so there's nothing left to guard against.
 
 ### Same-coin, multiple-traders conflict resolution
 
@@ -80,6 +90,7 @@ This repo follows gitflow. There is no remote push/PR workflow expected here —
 - **You may merge and delete `feature/*` and `bugfix/*` branches yourself** once the work is done and merged back into `develop` — no need to ask first for these two types.
 - **Never merge, close, or delete `hotfix/*` or `release/*` branches.** Those are the user's call exclusively — leave them as-is and tell the user they're ready, rather than acting on them.
 - Don't create a branch for every trivial change; use judgment the same way gitflow intends it — reach for a branch when the change is a distinct feature/fix worth isolating, not for a one-line tweak.
+- **Merge commit messages state what kind of merge it is, not what changed.** Use git's own default merge message — `Merge branch '<branch-name>' into <target>` (e.g. `Merge branch 'feature/emergency-page' into develop`, `Merge branch 'hotfix/0.9.4' into develop`) — never a Conventional-Commits-style summary of the diff. The branch name already says what it is; the merge commit's job is to record the topology (which branch merged into which), not re-describe the contents.
 
 ## Commits
 

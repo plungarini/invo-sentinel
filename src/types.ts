@@ -29,6 +29,9 @@ export interface OpenInvestment {
 	verifiedTrade: boolean;
 	priceTarget: number | null;
 	stopLoss: number | null;
+	createdAt: string;
+	entryPrice: number;
+	currentPrice: number;
 	portfolio: { id: string; title?: string };
 	owner: { id: string; username?: string };
 }
@@ -47,6 +50,21 @@ export interface PositionState {
 
 /** Full local state, persisted to disk. Keyed by the trader's baseId. */
 export type PositionStateMap = Record<string, PositionState>;
+
+/**
+ * A trader's baseId that was deliberately never opened (see
+ * stale-entry-policy.ts) and must stay that way for the lifetime of that
+ * specific investment, not just this poll cycle.
+ */
+export interface IgnoredTradeEntry {
+	coin: string;
+	portfolioId?: string;
+	reason: string;
+	ignoredAt: string;
+}
+
+/** Full local ignore-list, persisted to disk. Keyed by the trader's baseId. */
+export type IgnoredTradesMap = Record<string, IgnoredTradeEntry>;
 
 export interface RiskConfig {
 	/** Fraction, e.g. 0.02 for 2%. */

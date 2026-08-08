@@ -3,7 +3,8 @@ import type { AssetMeta, HyperliquidClient } from '../clients/hyperliquid-client
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
-import type { OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
+import { computeInvestmentPnlPercent, isStaleProfitableEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
+import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
 import { resolveMimickedCandidate } from './mimic-resolver.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
@@ -21,6 +22,7 @@ export interface PositionSyncOptions {
 	invo: InvoClient;
 	log: Logger;
 	risk: RiskConfig;
+	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
 }
@@ -58,9 +60,14 @@ export class PositionSync {
 		investment: OpenInvestment,
 		state: PositionStateMap,
 		investmentsByCoin: Map<string, OpenInvestment[]>,
+		ignored: IgnoredTradesMap,
 	): Promise<void> {
-		const { log, risk, dryRun, hl, invo } = this.opts;
+		const { log, risk, staleEntry, dryRun, hl, invo } = this.opts;
 		const coin = investment.ticker;
+
+		if (ignored[baseId]) {
+			return; // permanently skipped earlier for this investment; logged once already, not spammed every cycle
+		}
 
 		if (!this.hasAsset(coin)) {
 			log({ type: 'skip', reason: 'unknown coin on Hyperliquid', baseId, coin });
@@ -196,6 +203,34 @@ export class PositionSync {
 					});
 				}
 			}
+		}
+
+		// Still no real position to adopt — this would be a genuinely brand
+		// new order. If the trader's own entry is old enough to have already
+		// run up real profit, opening it now (at 0% PnL, full size) is a
+		// different trade than the one they actually took; skip it, and
+		// permanently, so it isn't retried next cycle or the moment a
+		// same-coin conflict blocking it happens to clear.
+		if (!entry.ourBaseShortId && isStaleProfitableEntry(investment, staleEntry)) {
+			const ageMinutes = (Date.now() - new Date(investment.createdAt).getTime()) / 60_000;
+			const pnlPct = computeInvestmentPnlPercent(investment);
+			ignored[baseId] = {
+				coin,
+				portfolioId: investment.portfolio?.id,
+				reason: `entry is ${ageMinutes.toFixed(1)}min old with ${pnlPct.toFixed(2)}% PnL (limits: ${staleEntry.maxAgeMinutes}min / ${staleEntry.maxProfitPct}%)`,
+				ignoredAt: new Date().toISOString(),
+			};
+			log({
+				type: 'stale_entry_ignored',
+				baseId,
+				coin,
+				trader: investment.owner?.username,
+				ageMinutes: Number(ageMinutes.toFixed(1)),
+				pnlPct: Number(pnlPct.toFixed(2)),
+				maxAgeMinutes: staleEntry.maxAgeMinutes,
+				maxProfitPct: staleEntry.maxProfitPct,
+			});
+			return;
 		}
 
 		const deltaMarginUsd = targetMarginUsd - entry.marginUsd;
