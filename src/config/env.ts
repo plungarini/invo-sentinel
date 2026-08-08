@@ -9,6 +9,8 @@ export interface AppConfig {
 	pollIntervalMs: number;
 	logRetentionHours: number;
 	logMaxTotalMb: number;
+	/** Optional external monitoring ping (e.g. healthchecks.io), fired after every poll cycle. Unset = disabled. */
+	healthcheckPingUrl?: string;
 }
 
 function parsePercent(raw: string | undefined, fallback: number): number {
@@ -54,5 +56,6 @@ export function loadConfig(overrides: { minMarginPct?: number; maxMarginPct?: nu
 		pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '', 10) || 5_000,
 		logRetentionHours: parseFloat(process.env.LOG_RETENTION_HOURS ?? '') || 24,
 		logMaxTotalMb: parseFloat(process.env.LOG_MAX_TOTAL_MB ?? '') || 200,
+		healthcheckPingUrl: process.env.HEALTHCHECK_PING_URL || undefined,
 	};
 }
