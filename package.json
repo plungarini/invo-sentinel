@@ -1,0 +1,24 @@
+{
+  "name": "invo-sentinel",
+  "version": "1.0.0",
+  "description": "Automatic, non-AI copy trader for Invo followed portfolios, executing on Hyperliquid.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "preflight": "tsx src/cli/preflight.ts",
+    "start": "tsx src/cli/auto-copy.ts",
+    "dry-run": "tsx src/cli/auto-copy.ts --dry-run",
+    "adopt": "tsx src/cli/adopt.ts",
+    "close": "tsx src/cli/close-position.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hyperliquid": "^1.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "dotenv": "^17.4.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
