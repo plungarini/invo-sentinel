@@ -80,6 +80,7 @@ This repo follows gitflow. There is no remote push/PR workflow expected here —
 - **You may merge and delete `feature/*` and `bugfix/*` branches yourself** once the work is done and merged back into `develop` — no need to ask first for these two types.
 - **Never merge, close, or delete `hotfix/*` or `release/*` branches.** Those are the user's call exclusively — leave them as-is and tell the user they're ready, rather than acting on them.
 - Don't create a branch for every trivial change; use judgment the same way gitflow intends it — reach for a branch when the change is a distinct feature/fix worth isolating, not for a one-line tweak.
+- **Merge commit messages state what kind of merge it is, not what changed.** Use git's own default merge message — `Merge branch '<branch-name>' into <target>` (e.g. `Merge branch 'feature/emergency-page' into develop`, `Merge branch 'hotfix/0.9.4' into develop`) — never a Conventional-Commits-style summary of the diff. The branch name already says what it is; the merge commit's job is to record the topology (which branch merged into which), not re-describe the contents.
 
 ## Commits
 
