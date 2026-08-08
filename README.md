@@ -27,7 +27,7 @@ npm run dry-run           # watch it decide without placing any real orders
 ./scripts/run.sh          # go live, with auto-restart on crash
 ```
 
-Run it somewhere that stays on; a closed laptop lid or terminal kills a foreground process. Use `tmux`/`screen`, or a real process supervisor (`pm2 start scripts/run.sh`, or a systemd unit with `Restart=always`).
+Run it somewhere that stays on; a closed laptop lid or terminal kills a foreground process. See [Running continuously](#running-continuously-survive-reboots-and-crashes) below for a real process supervisor setup — a terminal window or `tmux` session is fine for testing, but isn't enough on its own for something meant to run unattended.
 
 ## Credentials
 
@@ -90,6 +90,102 @@ Leave it unset and none of this runs at all.
 | `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                           |
 | `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict (see below)            |
 | `npm run close -- <coin>`                                               | Emergency manual close; stopping the daemon does **not** close open positions |
+
+## Running continuously (survive reboots and crashes)
+
+`scripts/run.sh` restarts the daemon if the process itself exits, but that's only half the problem: nothing brings it back after the machine reboots, and nothing starts it in the first place if you're not logged in (e.g. a headless box, or a Raspberry Pi that lost power and came back up). For that you want the OS's own service manager. On Linux, that's **systemd**, and it's already installed on essentially every mainstream distribution (Raspberry Pi OS, Ubuntu, Debian, Fedora, Arch, ...) — no extra software to install.
+
+This uses a **user service**, not a system-wide one: no `sudo` required, and it keeps a process that holds real trading credentials entirely inside your own user account rather than running as root.
+
+### 1. One-time: allow user services to start without a login session
+
+By default, a user's systemd services stop when their last session logs out, and don't start until they log back in — not what you want on a box that reboots unattended. Enable "lingering" once, for your own user:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Check it took effect: `loginctl show-user "$USER"` should include `Linger=yes`.
+
+### 2. Find the absolute paths you'll need
+
+The service file can't rely on your shell's `PATH`, login scripts, or `~` expansion — everything must be an absolute path. Find yours:
+
+```bash
+readlink -f .            # absolute path to this repo — call it <repo-path>
+which npx                # absolute path to npx — call it <npx-path>
+dirname "$(which npx)"   # the directory to put on PATH below — call it <npx-dir>
+```
+
+If you installed Node via `nvm`, `<npx-path>`/`<npx-dir>` will be somewhere under `~/.nvm/versions/node/<version>/bin` — that's expected and fine, just use the real resolved path, not one with `~` or `$HOME` in it.
+
+### 3. Create the service file
+
+Create `~/.config/systemd/user/invo-sentinel.service` (substitute your own `<repo-path>` and `<npx-dir>` from step 2):
+
+```ini
+[Unit]
+Description=Invo Sentinel - automatic Invo->Hyperliquid copy trading daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<repo-path>
+Environment=PATH=<npx-dir>:/usr/local/bin:/usr/bin:/bin
+ExecStart=<npx-dir>/npx tsx src/cli/auto-copy.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+`WorkingDirectory` is what makes `.env` and `.copy-state.json` resolve correctly (both are loaded/saved relative to the repo root) — this is the one setting most worth double-checking if something doesn't come up right.
+
+To pass a risk-band override instead of relying on `.env`, add it to `ExecStart`: `ExecStart=<npx-dir>/npx tsx src/cli/auto-copy.ts 2 5`.
+
+### 4. Enable and start it
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable invo-sentinel.service   # survives reboots from here on
+systemctl --user start invo-sentinel.service
+```
+
+### 5. Verify it's actually running, and that a crash really recovers
+
+```bash
+systemctl --user status invo-sentinel.service          # should say "active (running)"
+journalctl --user-unit invo-sentinel -f                 # live tail (logs/*.log also still gets written)
+```
+
+Prove the crash-recovery actually works rather than assuming it — this sends an unrecoverable signal, harder to survive than any error the app could catch on its own:
+
+```bash
+kill -9 "$(systemctl --user show -p MainPID --value invo-sentinel.service)"
+sleep 5
+systemctl --user status invo-sentinel.service   # should already be "active (running)" again, new PID
+```
+
+### Common commands
+
+| Command | What it does |
+|---|---|
+| `systemctl --user restart invo-sentinel.service` | Pick up a code or `.env` change |
+| `systemctl --user stop invo-sentinel.service` | Stop it (does **not** close open positions — see `npm run close`) |
+| `systemctl --user disable invo-sentinel.service` | Turn off auto-start on boot, without touching whether it's currently running |
+| `systemctl --user show -p NRestarts invo-sentinel.service` | How many times it's had to restart — rising unexpectedly is worth investigating in the logs |
+
+### Not on Linux, or don't want systemd
+
+The same idea (start on boot, restart on crash, no login required) is available elsewhere:
+
+- **pm2** (cross-platform Node process manager): `pm2 start "npx tsx src/cli/auto-copy.ts" --name invo-sentinel`, then `pm2 save` and `pm2 startup` (the latter prints an OS-specific command to run once, which wires pm2 itself into your OS's startup system).
+- **Docker**: run the repo in a container with `restart: always` (Compose) or `--restart=always` (plain `docker run`) — Docker's own daemon then handles both crash-restart and start-on-boot.
+- **launchd** (macOS): the native equivalent of systemd; same shape as above (a plist with `KeepAlive` and `RunAtLoad`, installed under `~/Library/LaunchAgents/`).
 
 ## Resolving pre-existing positions when traders overlap
 
