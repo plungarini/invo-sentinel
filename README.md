@@ -66,9 +66,20 @@ MAX_LEVERAGE=30        # leverage is capped here, not rejected; blank = no cap
 POLL_INTERVAL_MS=5000
 LOG_RETENTION_HOURS=24
 LOG_MAX_TOTAL_MB=200
+HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 ```
 
 `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` can also be passed positionally, overriding `.env`: `npm run start -- 2 5`.
+
+### External monitoring (optional)
+
+Set `HEALTHCHECK_PING_URL` to a ping URL from a "dead man's switch" style monitor (e.g. [healthchecks.io](https://healthchecks.io)) and the daemon will ping it every cycle with no effect on trading if the monitor itself is slow or unreachable — every ping is fire-and-forget, never awaited by the trading logic:
+
+- `<url>/start` at the beginning of each poll cycle.
+- `<url>` (plain, success) at the end of a cycle that completed without error — paired with the `/start` ping, this is what lets the monitor show per-cycle run time, not just up/down.
+- `<url>/fail` at the end of a cycle that threw, and also (best-effort, briefly awaited so it has a real chance to leave before the process exits) right before the process exits on an uncaught exception — an immediate failure signal instead of waiting for a missed-ping timeout to notice the daemon is down.
+
+Leave it unset and none of this runs at all.
 
 ## Commands
 
