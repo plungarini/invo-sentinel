@@ -1,6 +1,6 @@
 # invo-sentinel
 
-Automatic copy trading for [Invo](https://app.invoapp.com) followed portfolios, executed on [Hyperliquid](https://hyperliquid.xyz). A plain polling daemon mirrors every open, margin adjustment, and close from every trader you already follow, with one guardrail: your margin per trade is always clamped into a `[min%, max%]` band of your own equity, and leverage is capped. **Trades are never skipped, only resized.** It watches every followed portfolio and stands in for you, on your own risk terms.
+Automatic copy trading for [Invo](https://app.invoapp.com) followed portfolios, executed on [Hyperliquid](https://hyperliquid.xyz). A plain polling daemon mirrors every open, margin adjustment, and close from every trader you already follow, with one guardrail: your margin per trade is always clamped into a `[min%, max%]` band of your own equity, and leverage is capped. **Trades are never skipped for being "too risky", only resized** — the one deliberate exception is a trade that's already stale and profitable by the time it's seen (see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries)). It watches every followed portfolio and stands in for you, on your own risk terms.
 
 ## Relationship to the original project
 
@@ -63,6 +63,8 @@ console.log(new TextDecoder().decode(decrypted)); // 3 dot-separated parts; that
 MIN_MARGIN_PCT=2      # never risk less than this % of your equity per trade
 MAX_MARGIN_PCT=5      # never risk more than this %, no matter what the trader did
 MAX_LEVERAGE=30        # leverage is capped here, not rejected; blank = no cap
+STALE_ENTRY_MAX_AGE_MINUTES=1  # see "Skipping stale, already-profitable entries" below
+STALE_ENTRY_MAX_PROFIT_PCT=1
 POLL_INTERVAL_MS=5000
 LOG_RETENTION_HOURS=24
 LOG_MAX_TOTAL_MB=200
@@ -70,6 +72,14 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 ```
 
 `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` can also be passed positionally, overriding `.env`: `npm run start -- 2 5`.
+
+### Skipping stale, already-profitable entries
+
+Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception. If a followed trader's investment is older than `STALE_ENTRY_MAX_AGE_MINUTES` **and** already up more than `STALE_ENTRY_MAX_PROFIT_PCT`% (their own leveraged PnL%, not raw price move), it's skipped rather than opened.
+
+This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing. This rule catches that (and the same case without any conflict involved — any investment that's simply already old and profitable by the time this daemon first sees it, e.g. on startup).
+
+Once skipped, that baseId is permanently ignored — not retried next cycle, not reconsidered if its PnL later dips back under the threshold — for as long as that specific investment stays open on the trader's side. It's recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. The moment that baseId actually closes on the trader's side, the ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
 
 ### External monitoring (optional)
 
@@ -211,7 +221,7 @@ Things worth knowing if you're reading the code or extending it:
 - **Not the social feed.** `posts/get_feed` (what the original repo's `monitor.ts` used) has a real, confirmed server-side pagination bug, plus an inherent 1-10s propagation delay. This project uses `get_investments(isOpen: true)` per followed portfolio instead; a direct current-state snapshot, no history-walking, no pagination limit. `posts/get_feed` isn't called anywhere in this codebase.
 - **`entrySize` is a percent, not a fraction.** A trader's `entrySize: 0.2` means their margin is 0.20% of _their_ balance; confirmed against the Invo app UI, not documented anywhere. This project reapplies that same percent against _your_ equity, clamped to your configured band.
 - **No exchange-side TP/SL.** This account's phantom-agent key signing has two independently confirmed breakages tied to specific Hyperliquid order fields; `reduce_only: true`, and `grouping: 'normalTpsl'` (both silently produce wrong signature recovery). A stop/trigger order is a third, never-tested field combination on that same fragile signer. Exits mirror the trader's own close instead.
-- **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead.
+- **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead. The one deliberate exception: a stale, already-profitable entry is skipped outright rather than resized — see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries).
 - **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
 
 ## Disclaimer
