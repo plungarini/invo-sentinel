@@ -80,3 +80,29 @@ export interface HyperliquidPosition {
 	szi: string;
 	[key: string]: unknown;
 }
+
+/** One real fill from HL's own /info userFills — exchange ground truth, not derived from our logs. */
+export interface HyperliquidFill {
+	coin: string;
+	px: string;
+	sz: string;
+	side: 'A' | 'B';
+	time: number;
+	dir: string;
+	closedPnl: string;
+	oid: number;
+	tid: number;
+	[key: string]: unknown;
+}
+
+/**
+ * A previously-open investment now closed, as returned by
+ * /v1_0/investments/get_investments (isOpen: false). Same shape as
+ * OpenInvestment plus the close-specific fields.
+ */
+export interface ClosedInvestment extends OpenInvestment {
+	isOpen: false;
+	closedAt: string;
+	closingPrice: number | null;
+	reasonClosed: string | null;
+}

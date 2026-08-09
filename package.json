@@ -10,6 +10,7 @@
 		"dry-run": "tsx src/cli/auto-copy.ts --dry-run",
 		"adopt": "tsx src/cli/adopt.ts",
 		"close": "tsx src/cli/close-position.ts",
+		"reconcile": "tsx src/cli/reconcile.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

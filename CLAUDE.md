@@ -79,6 +79,7 @@ Hyperliquid nets positions **by coin**, not by trader, so a pre-existing real po
 - `preflight.ts` — read-only checks (env, Invo auth + refresh-token expiry, HL connect, market data, balance/positions), JSON output, exits non-zero on any failure.
 - `adopt.ts` — manual fixup for conflicts the reconciler can't safely resolve; writes local state only, places no orders, doesn't touch Invo's `/dex/position/create`.
 - `close-position.ts` — emergency manual flatten for one coin; also clears any tracked `baseId` mapped to that coin.
+- `reconcile.ts` — read-only audit, no orders/state changes. Cross-checks recent daemon behavior against two sources the live reconciler never consults: Invo's `isOpen: false` closed-investment history, and Hyperliquid's own `userFills` (matched to our logs by `oid`). Flags `unexplained_untracked_open`, `missed_close`, `delayed_close`, `unverified_fill`, and (info-severity) `open_never_filled`. See README's "Auditing what actually happened" section.
 
 Types in [src/types.ts](src/types.ts) mirror Invo's own reverse-engineered API field names 1:1 (no renaming), so payloads can be diff'd directly against real responses while debugging. Note `entrySize` is the trader's margin as a **percent of their own balance**, not yours — confirmed against the Invo app UI, undocumented elsewhere.
 
