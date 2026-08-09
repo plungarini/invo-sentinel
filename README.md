@@ -75,11 +75,22 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 
 ### Skipping stale, already-profitable entries
 
-Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception. If a followed trader's investment is older than `STALE_ENTRY_MAX_AGE_MINUTES` **and** already up more than `STALE_ENTRY_MAX_PROFIT_PCT`% (their own leveraged PnL%, not raw price move), it's skipped rather than opened.
+Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
 
-This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing. This rule catches that (and the same case without any conflict involved — any investment that's simply already old and profitable by the time this daemon first sees it, e.g. on startup).
+- **Older than `STALE_ENTRY_MAX_AGE_MINUTES`** → permanently skipped, no matter its current PnL. This is the primary gate: a trade idea past its freshness window doesn't get a second look based on how it happens to be doing at the exact moment this daemon considers it.
+- **Still within that window, but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`%** (its own leveraged PnL%, not raw price move) → skipped for *this cycle only*, not permanently. A trade that pumped immediately at entry can still cool back off before the window expires; it's re-checked fresh next cycle. Once the window does expire, the permanent rule above takes over regardless of PnL.
 
-Once skipped, that baseId is permanently ignored — not retried next cycle, not reconsidered if its PnL later dips back under the threshold — for as long as that specific investment stays open on the trader's side. It's recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. The moment that baseId actually closes on the trader's side, the ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
+This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing, so it's blocked purely on age, whatever B's PnL happens to be right then. The same rule also catches the case without any conflict involved — any investment that's simply already old by the time this daemon first sees it, e.g. on startup.
+
+A permanent skip is recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. A temporary, still-fresh skip is logged as `fresh_entry_profit_skip` and doesn't touch `.copy-ignored.json` at all. The moment a permanently-ignored baseId actually closes on the trader's side, its ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
+
+### Hyperliquid's minimum order size
+
+Hyperliquid rejects any order below $10 notional outright, independent of anything this project configures. On a small account with a tight `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` band and a low-leverage coin, the clamped target margin can easily compute to a notional under that floor — a real trade that would otherwise just never open, cycle after cycle, until it's eventually skipped by the stale-entry rule above for having gone unfilled too long.
+
+Consistent with "resize, don't skip": a **brand-new open** whose computed order would land under $10 is bumped up to exactly $10 notional instead of being attempted (and rejected) at the smaller size. This only applies to the initial open, not to incremental top-ups on an already-tracked position — those are left to cross the floor naturally as the target margin drifts, so a string of small adjustments can't inflate margin far past the configured band.
+
+Any order Hyperliquid still rejects for another reason (or if this floor still isn't enough for a given coin's exact tick constraints) is logged as `order_rejected` and left completely untouched — no state or Invo record is written for it — so the exact same delta is retried again next cycle instead of silently corrupting local tracking.
 
 ### External monitoring (optional)
 

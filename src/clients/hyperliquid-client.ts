@@ -10,6 +10,33 @@ function toSdkCoin(coin: string): string {
 	return coin.includes('-') ? coin : `${coin}-PERP`;
 }
 
+// HL rejects a perp limit price that violates EITHER of two independent
+// caps: 5 significant figures, AND at most (6 - szDecimals) decimal places.
+// For a major like BTC the second cap never bites (price is large, few
+// decimals needed); for a cheap coin like XAI/SAGA (sub-cent price) 5 sig
+// figs alone lands well past the decimal-place cap and HL returns "Order
+// has invalid price" — silently, inside a 200 OK, not a thrown error.
+function roundToValidLimitPx(rawPx: number, szDecimals: number): number {
+	const sigFigRounded = parseFloat(rawPx.toPrecision(5));
+	const maxDecimals = Math.max(0, 6 - szDecimals);
+	return parseFloat(sigFigRounded.toFixed(maxDecimals));
+}
+
+/**
+ * HL's placeOrder responds 200 OK even when the exchange rejected the
+ * order outright (e.g. bad price/size); the actual outcome is buried in
+ * response.data.statuses[]. Callers must check this before treating an
+ * order as real — recording tracked state or an Invo mimic off an order
+ * that never actually filled silently corrupts both.
+ */
+export function orderFillError(result: any): string | null {
+	if (result?.status !== 'ok') return result?.response ?? 'unknown error';
+	const statuses = result?.response?.data?.statuses;
+	if (!Array.isArray(statuses) || statuses.length === 0) return 'no order status returned';
+	const failed = statuses.find((s: any) => s && typeof s === 'object' && 'error' in s);
+	return failed ? failed.error : null;
+}
+
 export interface AssetMeta {
 	name: string;
 	szDecimals: number;
@@ -89,14 +116,19 @@ export class HyperliquidClient {
 		return this.getSdk().exchange.updateLeverage(toSdkCoin(coin), 'isolated', leverage);
 	}
 
-	async placeMarketOrder(coin: string, isBuy: boolean, size: string, slippagePct = 0.02): Promise<unknown> {
+	async placeMarketOrder(
+		coin: string,
+		isBuy: boolean,
+		size: string,
+		szDecimals: number,
+		slippagePct = 0.02,
+	): Promise<unknown> {
 		const mids = await this.getAllMids();
 		const mid = parseFloat(mids[coin]);
 		if (!mid) throw new Error(`No mid price for ${coin}`);
 
 		const rawPx = isBuy ? mid * (1 + slippagePct) : mid * (1 - slippagePct);
-		// HL rejects limit prices with more than 5 significant figures.
-		const limitPx = parseFloat(rawPx.toPrecision(5));
+		const limitPx = roundToValidLimitPx(rawPx, szDecimals);
 
 		return this.getSdk().exchange.placeOrder({
 			coin: toSdkCoin(coin),
@@ -111,13 +143,13 @@ export class HyperliquidClient {
 	}
 
 	/** Fully flattens whatever position currently exists for this coin. */
-	async closePosition(coin: string): Promise<unknown> {
+	async closePosition(coin: string, szDecimals: number): Promise<unknown> {
 		const positions = await this.getPositions();
 		const pos = positions.find((p) => p.coin === coin);
 		if (!pos) throw new Error(`No open position for ${coin}`);
 
 		const size = Math.abs(parseFloat(pos.szi));
 		const isLong = parseFloat(pos.szi) > 0;
-		return this.placeMarketOrder(coin, !isLong, size.toString(), 0.02);
+		return this.placeMarketOrder(coin, !isLong, size.toString(), szDecimals, 0.02);
 	}
 }
