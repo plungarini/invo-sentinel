@@ -3,7 +3,7 @@ import { orderFillError, type AssetMeta, type HyperliquidClient } from '../clien
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
-import { computeInvestmentPnlPercent, isStaleProfitableEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
+import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
 import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
 import { resolveMimickedCandidate } from './mimic-resolver.js';
 
@@ -206,31 +206,44 @@ export class PositionSync {
 		}
 
 		// Still no real position to adopt — this would be a genuinely brand
-		// new order. If the trader's own entry is old enough to have already
-		// run up real profit, opening it now (at 0% PnL, full size) is a
-		// different trade than the one they actually took; skip it, and
-		// permanently, so it isn't retried next cycle or the moment a
-		// same-coin conflict blocking it happens to clear.
-		if (!entry.ourBaseShortId && isStaleProfitableEntry(investment, staleEntry)) {
-			const ageMinutes = (Date.now() - new Date(investment.createdAt).getTime()) / 60_000;
-			const pnlPct = computeInvestmentPnlPercent(investment);
-			ignored[baseId] = {
-				coin,
-				portfolioId: investment.portfolio?.id,
-				reason: `entry is ${ageMinutes.toFixed(1)}min old with ${pnlPct.toFixed(2)}% PnL (limits: ${staleEntry.maxAgeMinutes}min / ${staleEntry.maxProfitPct}%)`,
-				ignoredAt: new Date().toISOString(),
-			};
-			log({
-				type: 'stale_entry_ignored',
-				baseId,
-				coin,
-				trader: investment.owner?.username,
-				ageMinutes: Number(ageMinutes.toFixed(1)),
-				pnlPct: Number(pnlPct.toFixed(2)),
-				maxAgeMinutes: staleEntry.maxAgeMinutes,
-				maxProfitPct: staleEntry.maxProfitPct,
-			});
-			return;
+		// new order. Gate it on freshness: past maxAgeMinutes, permanently
+		// refuse regardless of current PnL (a same-coin conflict clearing
+		// months after the fact doesn't make an old trade idea fresh again).
+		// Within the fresh window but already up more than maxProfitPct,
+		// refuse for now, but only for now — re-evaluated next cycle.
+		if (!entry.ourBaseShortId) {
+			const verdict = evaluateStaleEntry(investment, staleEntry);
+			if (verdict.skip) {
+				if (verdict.permanent) {
+					ignored[baseId] = {
+						coin,
+						portfolioId: investment.portfolio?.id,
+						reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min); permanently ignored regardless of PnL`,
+						ignoredAt: new Date().toISOString(),
+					};
+					log({
+						type: 'stale_entry_ignored',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+						maxAgeMinutes: staleEntry.maxAgeMinutes,
+					});
+				} else {
+					log({
+						type: 'fresh_entry_profit_skip',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+						maxProfitPct: staleEntry.maxProfitPct,
+						note: 'temporary — still within the fresh window; reconsidered next cycle',
+					});
+				}
+				return;
+			}
 		}
 
 		const deltaMarginUsd = targetMarginUsd - entry.marginUsd;
