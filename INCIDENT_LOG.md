@@ -62,6 +62,55 @@ error/incongruence needs real investigation (API probing, web research,
 research agents) until either fixed or genuinely exhausted with evidence
 documented.
 
+## 2026-08-10 00:xx — recordClose 404 investigation (research agent + fix attempt)
+
+Spawned a research agent to investigate before trying anything further (per user
+instruction: no more guessing without real investigation). It read the full
+reverse-engineered API surface in this repo, then **cloned the actual upstream
+`AKCodez/invo-copy-trader` repo** (not just searched for it) to see how the
+original author handled `recordClose`.
+
+**Findings**:
+- Upstream's `trade.ts`/`close.ts` are manual one-shot CLI commands, not a
+  daemon; a human copy-pastes the client-generated `baseShortId` from open to
+  close. The upstream skill doc explicitly claims "use your own
+  client-generated baseShortId for /dex/position/close" — but there is **zero
+  evidence anywhere in that repo that a close call was ever confirmed to
+  return success**; the README's troubleshooting table has a confirmed fix
+  for a different 404 (`/dex/trade`, trader's id vs. yours) but nothing for
+  `/dex/position/close`. The upstream project likely carries the exact same
+  latent 100%-failure bug, just never surfaced since nobody ran it through
+  enough manual close cycles to notice.
+- WebSearch for Invo/invoapp.com API specifics turned up nothing beyond
+  generic app-store listings and the same GitHub repo — no independent public
+  documentation of these DEX bookkeeping endpoints exists.
+- Structural evidence: `/dex/position/create` hard-rejects an unrecognized
+  `baseShortId` key (`400 unrecognized_keys` — confirmed live, see the
+  reverted fix above) — meaning the server assigns the position's identity
+  itself and returns it (`positionRecordId == eventId == tradeId`, confirmed
+  equal across every observed response, different per call). `/dex/position/
+  close` then 404s specifically (not 400) — the classic "shape accepted,
+  identity not found" signature of a server-side `db.find(clientSuppliedId)`
+  that finds nothing, because the server never learned our client-generated
+  id at any point.
+
+**Fix attempted** (`bugfix/recordclose-use-server-assigned-id`): capture
+`invoResult.data.positionRecordId` (falling back to `tradeId`/`eventId`) from
+a successful `recordOpen` call and use THAT as `ourBaseShortId` — the value
+later sent as `recordClose`'s `baseShortId` — instead of the client-generated
+one from `genBaseShortId()`. `genBaseShortId()` is still used as a fallback
+if `recordOpen` fails outright (nothing meaningful to capture) and, unchanged,
+for `auto_adopted` positions (which never call `recordOpen` at all, so there's
+no server-assigned id to capture regardless).
+
+**Not yet verified against a live close** — positions opened before this
+fix still hold the old locally-generated id in `.copy-state.json` and will
+still 404 on close until they close and a fresh position opens under the new
+logic. Need to watch the next real close of a position opened AFTER this
+deploy to confirm `invoResult.success:true` instead of the 404. If it still
+fails, hypothesis #2 (trader's own `investment.baseShortId`) is next in line
+per the research agent's ranked list.
+
 ## 2026-08-10 — overnight/next-day regime starts
 
 User will be unreachable until afternoon. New standing instructions:
