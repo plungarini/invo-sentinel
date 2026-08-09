@@ -128,4 +128,4 @@ User will be unreachable until afternoon. New standing instructions:
 
 ## Heartbeat counter (machine-maintained, do not hand-edit)
 
-Last heartbeat: 0/3 (next wakeup should run heartbeat 1/3)
+Last heartbeat: 1/3 (next wakeup should run heartbeat 2/3) — 2026-08-10T01:16 CEST: healthy, no errors, no opens/closes to verify recordClose fix yet
