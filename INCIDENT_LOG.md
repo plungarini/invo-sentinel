@@ -125,3 +125,7 @@ User will be unreachable until afternoon. New standing instructions:
   deleted by me. Never create/touch `hotfix/*`/`release/*`. No pushing.
   Only `develop` and `master` should exist as branches at any given time.
 
+
+## Heartbeat counter (machine-maintained, do not hand-edit)
+
+Last heartbeat: 0/3 (next wakeup should run heartbeat 1/3)
