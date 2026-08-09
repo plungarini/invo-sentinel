@@ -1,5 +1,5 @@
 import { Hyperliquid } from 'hyperliquid';
-import type { HyperliquidPosition } from '../types.js';
+import type { HyperliquidFill, HyperliquidPosition } from '../types.js';
 
 // Required on every order for Invo compatibility.
 const INVO_BUILDER = { address: '0x557edb253b1d7ed5f15b248a5a3fd919fa5d3c81', fee: 35 };
@@ -110,6 +110,24 @@ export class HyperliquidClient {
 		});
 		const data = await resp.json();
 		return parseFloat(data.marginSummary.accountValue);
+	}
+
+	/**
+	 * Ground-truth fill history straight from the exchange — independent of
+	 * this daemon's own logs, so it's what reconciliation checks compare
+	 * against. Each fill's `oid` matches the order id this project's own
+	 * `opened`/`closed`/`increased`/`reduced` log lines record from
+	 * `placeOrder`'s response, so fills can be matched 1:1 back to a
+	 * specific tracked action. `dir` is HL's own "Open Long"/"Close
+	 * Short"/etc. classification.
+	 */
+	async getUserFills(): Promise<HyperliquidFill[]> {
+		const resp = await fetch('https://api.hyperliquid.xyz/info', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ type: 'userFills', user: this.walletAddress, aggregateByTime: true }),
+		});
+		return resp.json();
 	}
 
 	async setLeverage(coin: string, leverage: number): Promise<unknown> {
