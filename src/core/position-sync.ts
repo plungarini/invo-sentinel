@@ -364,6 +364,7 @@ export class PositionSync {
 			try {
 				invoResult = await invo.recordOpen({
 					clientTxId: randomUUID(),
+					baseShortId: ourBaseShortId,
 					coin,
 					assetIndex: this.assetIndexByCoin[coin],
 					entry: { side: isBuy ? 'long' : 'short', marginMode: 'isolated', leverage, tpPx: null, slPx: null },
