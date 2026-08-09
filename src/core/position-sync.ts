@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'crypto';
-import type { AssetMeta, HyperliquidClient } from '../clients/hyperliquid-client.js';
+import { orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
@@ -298,9 +298,20 @@ export class PositionSync {
 
 		let orderResult: unknown;
 		try {
-			orderResult = await hl.placeMarketOrder(coin, orderIsBuy, deltaSize.toString());
+			orderResult = await hl.placeMarketOrder(coin, orderIsBuy, deltaSize.toString(), szDecimals);
 		} catch (e: any) {
 			log({ type: 'error', source: 'hl_order', baseId, coin, message: e.message });
+			return;
+		}
+
+		// HL responds 200 OK even when it rejected the order outright (e.g. an
+		// invalid price); the real outcome is nested in the response body.
+		// Trusting an unfilled order here would tag state/Invo as opened when
+		// nothing actually happened on the exchange — leave both untouched so
+		// the same delta gets retried, unchanged, next cycle.
+		const fillError = orderFillError(orderResult);
+		if (fillError) {
+			log({ type: 'order_rejected', source: 'hl_order', baseId, coin, message: fillError, hlResult: orderResult });
 			return;
 		}
 
@@ -379,7 +390,19 @@ export class PositionSync {
 			return;
 		}
 
-		const closeResult = await hl.closePosition(entry.coin);
+		const szDecimals = this.szDecimalsByCoin[entry.coin] ?? 4;
+		const closeResult = await hl.closePosition(entry.coin, szDecimals);
+
+		// Same trap as opens: a 200 OK can still mean the exchange rejected
+		// the order. If it did, the real position is still open — do NOT
+		// drop tracking for it, or it'll be silently forgotten while still
+		// live on the wallet.
+		const fillError = orderFillError(closeResult);
+		if (fillError) {
+			log({ type: 'order_rejected', source: 'hl_close', baseId, coin: entry.coin, message: fillError, hlResult: closeResult });
+			return;
+		}
+
 		let invoResult: any = null;
 		try {
 			invoResult = await invo.recordClose({
