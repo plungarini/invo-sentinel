@@ -5,7 +5,6 @@ const MAX_RATE_LIMIT_RETRIES = 3;
 
 export interface RecordOpenPayload {
 	clientTxId: string;
-	baseShortId: string;
 	coin: string;
 	assetIndex: number;
 	entry: {
