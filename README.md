@@ -88,9 +88,9 @@ A permanent skip is recorded in `.copy-ignored.json`, separate from `.copy-state
 
 Hyperliquid rejects any order below $10 notional outright, independent of anything this project configures. On a small account with a tight `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` band and a low-leverage coin, the clamped target margin can easily compute to a notional under that floor — a real trade that would otherwise just never open, cycle after cycle, until it's eventually skipped by the stale-entry rule above for having gone unfilled too long.
 
-Consistent with "resize, don't skip": a **brand-new open** whose computed order would land under $10 is bumped up to exactly $10 notional instead of being attempted (and rejected) at the smaller size. This only applies to the initial open, not to incremental top-ups on an already-tracked position — those are left to cross the floor naturally as the target margin drifts, so a string of small adjustments can't inflate margin far past the configured band.
+Consistent with "resize, don't skip": a **brand-new open** whose computed order would land under $10 is bumped up to just over $10 notional (a small buffer, since rounding the order size to the coin's tick precision can otherwise undershoot back below the floor and get rejected right back) instead of being attempted at the smaller size. An **incremental top-up** (or a small reduce) on an already-tracked position that lands under $10 genuinely cannot be placed at all — Hyperliquid would reject it identically every cycle — so it's left completely untouched and retried next cycle once `targetMarginUsd` has drifted further, rather than repeatedly hammering the exchange with an order guaranteed to fail.
 
-Any order Hyperliquid still rejects for another reason (or if this floor still isn't enough for a given coin's exact tick constraints) is logged as `order_rejected` and left completely untouched — no state or Invo record is written for it — so the exact same delta is retried again next cycle instead of silently corrupting local tracking.
+Any order Hyperliquid still rejects for another reason is logged as `order_rejected` and left completely untouched — no state or Invo record is written for it — so the exact same delta is retried again next cycle instead of silently corrupting local tracking.
 
 ### External monitoring (optional)
 
