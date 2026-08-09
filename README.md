@@ -111,6 +111,24 @@ Leave it unset and none of this runs at all.
 | `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                           |
 | `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict (see below)            |
 | `npm run close -- <coin>`                                               | Emergency manual close; stopping the daemon does **not** close open positions |
+| `npm run reconcile -- --hours=6`                                        | Read-only audit; see below                                                    |
+
+## Auditing what actually happened (`npm run reconcile`)
+
+The live daemon's own logs are a record of what it *decided* to do, not independent proof that it was right. `npm run reconcile -- --hours=6` (window defaults to 6) cross-checks recent behavior against two sources this daemon never otherwise consults:
+
+- **Invo's own closed-investment history** (`isOpen: false` — the live reconciler only ever looks at `isOpen: true`) — the trader's actual full/partial-close record, independent of anything we logged.
+- **Hyperliquid's own `userFills`** — the exchange's ground-truth fill history, matched back to our logs by order id (`oid`), independent of anything Invo or our own state claims happened.
+
+It flags:
+
+- `unexplained_untracked_open` — a trader's open position we're neither tracking, ignoring, nor have a conflict log explaining.
+- `missed_close` — a trader closed something we were tracking, and we have no `closed` log event for it at all.
+- `delayed_close` — we did close it, just unusually slowly (>5 min after the trader).
+- `unverified_fill` — we logged an order as filled with a given `oid`, but HL's own fill history in the window has no matching entry.
+- `open_never_filled` (informational) — we logged `opened` but later found no real position to close; almost always means that original order silently never actually filled on the exchange.
+
+Read-only: places no orders, changes no state. Exits non-zero only if it found anything above `info` severity.
 
 ## Running continuously (survive reboots and crashes)
 
