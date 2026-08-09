@@ -8,6 +8,7 @@ import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } f
 import { resolveMimickedCandidate } from './mimic-resolver.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
+const HL_MIN_NOTIONAL_USD = 10; // exchange-enforced floor; below this HL rejects the order outright
 
 function genBaseShortId(): string {
 	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
@@ -258,16 +259,29 @@ export class PositionSync {
 			return;
 		}
 
+		const wasNewPosition = !entry.ourBaseShortId;
+
 		// Only hit the leverage-update endpoint when it's actually changing ;
 		// shaves a round trip off the common case (margin adjustment at
 		// unchanged leverage).
-		if (!dryRun && (entry.leverage !== leverage || !entry.ourBaseShortId)) {
+		if (!dryRun && (entry.leverage !== leverage || wasNewPosition)) {
 			await hl.setLeverage(coin, leverage);
 		}
 
 		const szDecimals = this.szDecimalsByCoin[coin] ?? 4;
 		const isIncrease = deltaMarginUsd > 0;
-		const deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
+		let deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
+
+		// HL enforces a hard $10 minimum order notional and rejects anything
+		// below it outright. Only bump a brand-new open up to the floor — an
+		// established position's incremental top-up landing below $10 is
+		// fine to just skip this cycle (targetMarginUsd keeps drifting, so it
+		// typically crosses the floor on its own); forcing every small
+		// top-up to $10 would inflate margin well past the intended band.
+		if (wasNewPosition && isIncrease && deltaNotionalUsd < HL_MIN_NOTIONAL_USD) {
+			deltaNotionalUsd = HL_MIN_NOTIONAL_USD;
+		}
+
 		const deltaSize = parseFloat((deltaNotionalUsd / price).toFixed(szDecimals));
 
 		if (deltaSize <= 0) {
@@ -279,14 +293,19 @@ export class PositionSync {
 		// existing position automatically (same primitive a full close uses,
 		// just with a partial size here).
 		const orderIsBuy = isIncrease ? isBuy : !isBuy;
-		const wasNewPosition = !entry.ourBaseShortId;
+
+		// The margin this order actually moves, computed from the real
+		// (rounded, possibly floor-bumped) order size rather than the
+		// pre-rounding target, so tracked state matches what actually executes.
+		const actualDeltaMarginUsd = (deltaSize * price) / leverage;
+		const finalMarginUsd = entry.marginUsd + (isIncrease ? actualDeltaMarginUsd : -actualDeltaMarginUsd);
 
 		if (dryRun) {
 			state[baseId] = {
 				coin,
 				isBuy,
 				leverage,
-				marginUsd: targetMarginUsd,
+				marginUsd: finalMarginUsd,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
 				ownerUsername: investment.owner?.username,
@@ -302,7 +321,7 @@ export class PositionSync {
 				traderPercent: rawPercent,
 				clampedPercent: clampedFraction * 100,
 				marginUsdBefore: entry.marginUsd,
-				marginUsdAfter: targetMarginUsd,
+				marginUsdAfter: finalMarginUsd,
 				wouldOrderSize: deltaSize,
 				wouldOrderSide: orderIsBuy ? 'buy' : 'sell',
 			});
@@ -324,7 +343,16 @@ export class PositionSync {
 		// the same delta gets retried, unchanged, next cycle.
 		const fillError = orderFillError(orderResult);
 		if (fillError) {
-			log({ type: 'order_rejected', source: 'hl_order', baseId, coin, message: fillError, hlResult: orderResult });
+			log({
+				type: 'order_rejected',
+				source: 'hl_order',
+				baseId,
+				coin,
+				message: fillError,
+				deltaSize,
+				notionalUsd: deltaSize * price,
+				hlResult: orderResult,
+			});
 			return;
 		}
 
@@ -357,7 +385,7 @@ export class PositionSync {
 			coin,
 			isBuy,
 			leverage,
-			marginUsd: targetMarginUsd,
+			marginUsd: finalMarginUsd,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,
@@ -374,7 +402,7 @@ export class PositionSync {
 			traderPercent: rawPercent,
 			clampedPercent: clampedFraction * 100,
 			marginUsdBefore: entry.marginUsd,
-			marginUsdAfter: targetMarginUsd,
+			marginUsdAfter: finalMarginUsd,
 			orderSize: deltaSize,
 			orderSide: orderIsBuy ? 'buy' : 'sell',
 			hlResult: orderResult,
