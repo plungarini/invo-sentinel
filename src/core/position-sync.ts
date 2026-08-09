@@ -260,26 +260,37 @@ export class PositionSync {
 		}
 
 		const wasNewPosition = !entry.ourBaseShortId;
+		const szDecimals = this.szDecimalsByCoin[coin] ?? 4;
+		const isIncrease = deltaMarginUsd > 0;
+		let deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
+
+		// HL enforces a hard $10 minimum order notional and rejects anything
+		// below it outright — checked BEFORE attempting anything, so a
+		// doomed-to-fail order never actually hits the exchange.
+		if (deltaNotionalUsd < HL_MIN_NOTIONAL_USD) {
+			if (wasNewPosition && isIncrease) {
+				// Bump a brand-new open up to the floor, with a small buffer —
+				// rounding deltaSize to szDecimals can otherwise undershoot
+				// back below $10 and get rejected right back (seen live: a
+				// $10.00 target rounded down to $9.997).
+				deltaNotionalUsd = HL_MIN_NOTIONAL_USD * 1.02;
+			} else {
+				// An already-tracked position's top-up (or a reduce) landing
+				// below the floor genuinely cannot be placed at all — HL
+				// would reject it identically every cycle. Leave it for next
+				// cycle, when targetMarginUsd has drifted further from
+				// entry.marginUsd, instead of hammering the exchange with a
+				// guaranteed-rejected order every poll.
+				state[baseId] = { ...entry, leverage, isBuy };
+				return;
+			}
+		}
 
 		// Only hit the leverage-update endpoint when it's actually changing ;
 		// shaves a round trip off the common case (margin adjustment at
 		// unchanged leverage).
 		if (!dryRun && (entry.leverage !== leverage || wasNewPosition)) {
 			await hl.setLeverage(coin, leverage);
-		}
-
-		const szDecimals = this.szDecimalsByCoin[coin] ?? 4;
-		const isIncrease = deltaMarginUsd > 0;
-		let deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
-
-		// HL enforces a hard $10 minimum order notional and rejects anything
-		// below it outright. Only bump a brand-new open up to the floor — an
-		// established position's incremental top-up landing below $10 is
-		// fine to just skip this cycle (targetMarginUsd keeps drifting, so it
-		// typically crosses the floor on its own); forcing every small
-		// top-up to $10 would inflate margin well past the intended band.
-		if (wasNewPosition && isIncrease && deltaNotionalUsd < HL_MIN_NOTIONAL_USD) {
-			deltaNotionalUsd = HL_MIN_NOTIONAL_USD;
 		}
 
 		const deltaSize = parseFloat((deltaNotionalUsd / price).toFixed(szDecimals));
