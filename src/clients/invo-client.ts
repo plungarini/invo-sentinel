@@ -1,4 +1,4 @@
-import type { FollowedPortfolio, OpenInvestment } from '../types.js';
+import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../types.js';
 
 const BASE = 'https://api.invoapp.com';
 const MAX_RATE_LIMIT_RETRIES = 3;
@@ -168,6 +168,22 @@ export class InvoClient {
 			params: { page: 1, size: 50 },
 		});
 		return (data.investmentsTicker ?? []) as OpenInvestment[];
+	}
+
+	/**
+	 * The trader's own closed-trade history — includes `closedAt`,
+	 * `closingPrice`, `reasonClosed` not present on open investments.
+	 * NOT used by the live reconciler (source of truth for what to mirror
+	 * is still isOpen:true); this is for reconciliation/auditing only, to
+	 * check what a trader actually did against what this daemon did.
+	 */
+	async getClosedInvestments(portfolioId: string, page = 1, size = 20): Promise<ClosedInvestment[]> {
+		const data = await this.post('/v1_0/investments/get_investments', {
+			portfolioId,
+			isOpen: false,
+			params: { page, size },
+		});
+		return (data.investmentsTicker ?? []) as ClosedInvestment[];
 	}
 
 	/**
