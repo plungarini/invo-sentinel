@@ -252,6 +252,7 @@ Things worth knowing if you're reading the code or extending it:
 - **No exchange-side TP/SL.** This account's phantom-agent key signing has two independently confirmed breakages tied to specific Hyperliquid order fields; `reduce_only: true`, and `grouping: 'normalTpsl'` (both silently produce wrong signature recovery). A stop/trigger order is a third, never-tested field combination on that same fragile signer. Exits mirror the trader's own close instead.
 - **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead. The one deliberate exception: a stale, already-profitable entry is skipped outright rather than resized — see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries).
 - **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
+- **Every HL/Invo network call has a 15s timeout.** A hung connection with no timeout blocks the entire reconcile cycle indefinitely with nothing ever thrown — no error log, no crash, just silence until something external (a manual restart) breaks the stall. Bounded so a stall becomes an ordinary caught error instead, retried next cycle.
 
 ## Disclaimer
 
