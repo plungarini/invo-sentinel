@@ -10,6 +10,27 @@ function toSdkCoin(coin: string): string {
 	return coin.includes('-') ? coin : `${coin}-PERP`;
 }
 
+const HL_INFO_TIMEOUT_MS = 15_000;
+
+/**
+ * Every /info call goes through here specifically so none of them can hang
+ * forever: a dead/stalled connection with no timeout blocks the entire
+ * reconcile cycle indefinitely with nothing ever thrown, so the daemon
+ * looks "silently frozen" rather than erroring — no log line, no crash,
+ * just no forward progress until something external (a restart) breaks
+ * the stall. A bounded timeout turns that into an ordinary catchable
+ * error instead, retried on the very next cycle.
+ */
+async function postInfo(body: unknown): Promise<any> {
+	const resp = await fetch('https://api.hyperliquid.xyz/info', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(HL_INFO_TIMEOUT_MS),
+	});
+	return resp.json();
+}
+
 // HL rejects a perp limit price that violates EITHER of two independent
 // caps: 5 significant figures, AND at most (6 - szDecimals) decimal places.
 // For a major like BTC the second cap never bites (price is large, few
@@ -75,40 +96,20 @@ export class HyperliquidClient {
 	}
 
 	async getMeta(): Promise<{ universe: AssetMeta[] }> {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'meta' }),
-		});
-		return resp.json();
+		return postInfo({ type: 'meta' });
 	}
 
 	async getAllMids(): Promise<Record<string, string>> {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'allMids' }),
-		});
-		return resp.json();
+		return postInfo({ type: 'allMids' });
 	}
 
 	async getPositions(): Promise<HyperliquidPosition[]> {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'clearinghouseState', user: this.walletAddress }),
-		});
-		const data = await resp.json();
+		const data = await postInfo({ type: 'clearinghouseState', user: this.walletAddress });
 		return data.assetPositions.filter((p: any) => parseFloat(p.position.szi) !== 0).map((p: any) => p.position);
 	}
 
 	async getAccountValueUsd(): Promise<number> {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'clearinghouseState', user: this.walletAddress }),
-		});
-		const data = await resp.json();
+		const data = await postInfo({ type: 'clearinghouseState', user: this.walletAddress });
 		return parseFloat(data.marginSummary.accountValue);
 	}
 
@@ -122,12 +123,7 @@ export class HyperliquidClient {
 	 * Short"/etc. classification.
 	 */
 	async getUserFills(): Promise<HyperliquidFill[]> {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'userFills', user: this.walletAddress, aggregateByTime: true }),
-		});
-		return resp.json();
+		return postInfo({ type: 'userFills', user: this.walletAddress, aggregateByTime: true });
 	}
 
 	async setLeverage(coin: string, leverage: number): Promise<unknown> {
