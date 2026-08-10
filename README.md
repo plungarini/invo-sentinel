@@ -55,7 +55,7 @@ console.log(new TextDecoder().decode(decrypted)); // 3 dot-separated parts; that
 
 **`HL_AGENT_KEY`** (~90 day TTL). DevTools → Application → IndexedDB → `invo_hl_agents` → `agents` → `current` → `privateKey`.
 
-**`WALLET_ADDRESS`**: your Invo profile, or DevTools → Application → Local Storage → value of `flutter.hl.masterAddress`.
+**`WALLET_ADDRESS`**: DevTools → Application → Local Storage → value of `flutter.hl.masterAddress`.
 
 ## Risk configuration
 
@@ -78,7 +78,7 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
 
 - **Older than `STALE_ENTRY_MAX_AGE_MINUTES`** → permanently skipped, no matter its current PnL. This is the primary gate: a trade idea past its freshness window doesn't get a second look based on how it happens to be doing at the exact moment this daemon considers it.
-- **Still within that window, but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`%** (its own leveraged PnL%, not raw price move) → skipped for *this cycle only*, not permanently. A trade that pumped immediately at entry can still cool back off before the window expires; it's re-checked fresh next cycle. Once the window does expire, the permanent rule above takes over regardless of PnL.
+- **Still within that window, but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`%** (its own leveraged PnL%, not raw price move) → skipped for _this cycle only_, not permanently. A trade that pumped immediately at entry can still cool back off before the window expires; it's re-checked fresh next cycle. Once the window does expire, the permanent rule above takes over regardless of PnL.
 
 This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing, so it's blocked purely on age, whatever B's PnL happens to be right then. The same rule also catches the case without any conflict involved — any investment that's simply already old by the time this daemon first sees it, e.g. on startup.
 
@@ -115,7 +115,7 @@ Leave it unset and none of this runs at all.
 
 ## Auditing what actually happened (`npm run reconcile`)
 
-The live daemon's own logs are a record of what it *decided* to do, not independent proof that it was right. `npm run reconcile -- --hours=6` (window defaults to 6) cross-checks recent behavior against two sources this daemon never otherwise consults:
+The live daemon's own logs are a record of what it _decided_ to do, not independent proof that it was right. `npm run reconcile -- --hours=6` (window defaults to 6) cross-checks recent behavior against two sources this daemon never otherwise consults:
 
 - **Invo's own closed-investment history** (`isOpen: false` — the live reconciler only ever looks at `isOpen: true`) — the trader's actual full/partial-close record, independent of anything we logged.
 - **Hyperliquid's own `userFills`** — the exchange's ground-truth fill history, matched back to our logs by order id (`oid`), independent of anything Invo or our own state claims happened.
@@ -212,11 +212,11 @@ systemctl --user status invo-sentinel.service   # should already be "active (run
 
 ### Common commands
 
-| Command | What it does |
-|---|---|
-| `systemctl --user restart invo-sentinel.service` | Pick up a code or `.env` change |
-| `systemctl --user stop invo-sentinel.service` | Stop it (does **not** close open positions — see `npm run close`) |
-| `systemctl --user disable invo-sentinel.service` | Turn off auto-start on boot, without touching whether it's currently running |
+| Command                                                    | What it does                                                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `systemctl --user restart invo-sentinel.service`           | Pick up a code or `.env` change                                                             |
+| `systemctl --user stop invo-sentinel.service`              | Stop it (does **not** close open positions — see `npm run close`)                           |
+| `systemctl --user disable invo-sentinel.service`           | Turn off auto-start on boot, without touching whether it's currently running                |
 | `systemctl --user show -p NRestarts invo-sentinel.service` | How many times it's had to restart — rising unexpectedly is worth investigating in the logs |
 
 ### Not on Linux, or don't want systemd
