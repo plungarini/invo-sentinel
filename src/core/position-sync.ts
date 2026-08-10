@@ -125,6 +125,80 @@ export class PositionSync {
 			ownerUsername: investment.owner?.username,
 		};
 
+		// The user is always free to open/edit/close positions manually on
+		// Hyperliquid directly — this daemon must never crash or fight that.
+		// Everything below (delta sizing) is computed purely from our OWN
+		// `entry.marginUsd`, never cross-checked against the real exchange
+		// position, so a manual edit desyncs that baseline silently unless
+		// resynced here first, before any already-tracked baseId's delta is
+		// computed. Two cases:
+		//  - No real position at all → the user closed it manually while the
+		//    trader's own signal is still open. Respect that as a deliberate
+		//    stop-managing instruction: permanently ignore this baseId
+		//    rather than silently reopening it next cycle (which is exactly
+		//    what would otherwise happen — a fresh, empty `entry` cycling
+		//    right back through the brand-new-open path).
+		//  - Real position exists but its size (or direction) has changed
+		//    manually → resync `entry.marginUsd` to the REAL live size
+		//    before computing the delta, so the next order moves from where
+		//    the position actually is, not from a stale internal guess.
+		if (entry.ourBaseShortId) {
+			const livePositions = await hl.getPositions();
+			const realPosition = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
+			if (!realPosition) {
+				ignored[baseId] = {
+					coin,
+					portfolioId: investment.portfolio?.id,
+					reason: 'tracked position has no matching real HL position anymore — closed manually or externally; permanently stopping management of this specific trade rather than silently reopening it',
+					ignoredAt: new Date().toISOString(),
+				};
+				delete state[baseId];
+				log({
+					type: 'manual_close_detected',
+					baseId,
+					coin,
+					trader: investment.owner?.username,
+					detail: 'no real HL position found for an already-tracked baseId; assuming manual/external close, will not reopen',
+				});
+				return;
+			}
+			const realDirectionMatches = parseFloat(realPosition.szi) > 0 === entry.isBuy;
+			if (!realDirectionMatches) {
+				ignored[baseId] = {
+					coin,
+					portfolioId: investment.portfolio?.id,
+					reason: `real HL position direction (${parseFloat(realPosition.szi) > 0 ? 'long' : 'short'}) no longer matches tracked direction (${entry.isBuy ? 'long' : 'short'}) — manual intervention detected; permanently stopping management of this specific trade`,
+					ignoredAt: new Date().toISOString(),
+				};
+				delete state[baseId];
+				log({
+					type: 'manual_direction_change_detected',
+					baseId,
+					coin,
+					trader: investment.owner?.username,
+					trackedDirection: entry.isBuy ? 'long' : 'short',
+					realDirection: parseFloat(realPosition.szi) > 0 ? 'long' : 'short',
+				});
+				return;
+			}
+			const realPrice = parseFloat(mids[coin]);
+			if (realPrice && entry.leverage) {
+				const realMarginUsd = (Math.abs(parseFloat(realPosition.szi)) * realPrice) / entry.leverage;
+				if (Math.abs(realMarginUsd - entry.marginUsd) >= MIN_ORDER_USD) {
+					log({
+						type: 'resynced_to_live_position',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						trackedMarginUsd: entry.marginUsd,
+						realMarginUsd,
+						detail: 'real HL position size no longer matched tracked margin — resynced before computing this cycle\'s delta',
+					});
+					entry.marginUsd = realMarginUsd;
+				}
+			}
+		}
+
 		// No other tracked baseId owns this coin. There may still be a REAL,
 		// untracked position on it that pre-dates the daemon — wrong
 		// direction vs. it → definitely not this one, skip quietly (some
