@@ -1,13 +1,14 @@
 import { randomBytes, randomUUID } from 'crypto';
-import type { AssetMeta, HyperliquidClient } from '../clients/hyperliquid-client.js';
+import { orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
-import { computeInvestmentPnlPercent, isStaleProfitableEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
+import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
 import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
 import { resolveMimickedCandidate } from './mimic-resolver.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
+const HL_MIN_NOTIONAL_USD = 10; // exchange-enforced floor; below this HL rejects the order outright
 
 function genBaseShortId(): string {
 	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
@@ -206,31 +207,44 @@ export class PositionSync {
 		}
 
 		// Still no real position to adopt — this would be a genuinely brand
-		// new order. If the trader's own entry is old enough to have already
-		// run up real profit, opening it now (at 0% PnL, full size) is a
-		// different trade than the one they actually took; skip it, and
-		// permanently, so it isn't retried next cycle or the moment a
-		// same-coin conflict blocking it happens to clear.
-		if (!entry.ourBaseShortId && isStaleProfitableEntry(investment, staleEntry)) {
-			const ageMinutes = (Date.now() - new Date(investment.createdAt).getTime()) / 60_000;
-			const pnlPct = computeInvestmentPnlPercent(investment);
-			ignored[baseId] = {
-				coin,
-				portfolioId: investment.portfolio?.id,
-				reason: `entry is ${ageMinutes.toFixed(1)}min old with ${pnlPct.toFixed(2)}% PnL (limits: ${staleEntry.maxAgeMinutes}min / ${staleEntry.maxProfitPct}%)`,
-				ignoredAt: new Date().toISOString(),
-			};
-			log({
-				type: 'stale_entry_ignored',
-				baseId,
-				coin,
-				trader: investment.owner?.username,
-				ageMinutes: Number(ageMinutes.toFixed(1)),
-				pnlPct: Number(pnlPct.toFixed(2)),
-				maxAgeMinutes: staleEntry.maxAgeMinutes,
-				maxProfitPct: staleEntry.maxProfitPct,
-			});
-			return;
+		// new order. Gate it on freshness: past maxAgeMinutes, permanently
+		// refuse regardless of current PnL (a same-coin conflict clearing
+		// months after the fact doesn't make an old trade idea fresh again).
+		// Within the fresh window but already up more than maxProfitPct,
+		// refuse for now, but only for now — re-evaluated next cycle.
+		if (!entry.ourBaseShortId) {
+			const verdict = evaluateStaleEntry(investment, staleEntry);
+			if (verdict.skip) {
+				if (verdict.permanent) {
+					ignored[baseId] = {
+						coin,
+						portfolioId: investment.portfolio?.id,
+						reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min); permanently ignored regardless of PnL`,
+						ignoredAt: new Date().toISOString(),
+					};
+					log({
+						type: 'stale_entry_ignored',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+						maxAgeMinutes: staleEntry.maxAgeMinutes,
+					});
+				} else {
+					log({
+						type: 'fresh_entry_profit_skip',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+						maxProfitPct: staleEntry.maxProfitPct,
+						note: 'temporary — still within the fresh window; reconsidered next cycle',
+					});
+				}
+				return;
+			}
 		}
 
 		const deltaMarginUsd = targetMarginUsd - entry.marginUsd;
@@ -245,16 +259,40 @@ export class PositionSync {
 			return;
 		}
 
+		const wasNewPosition = !entry.ourBaseShortId;
+		const szDecimals = this.szDecimalsByCoin[coin] ?? 4;
+		const isIncrease = deltaMarginUsd > 0;
+		let deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
+
+		// HL enforces a hard $10 minimum order notional and rejects anything
+		// below it outright — checked BEFORE attempting anything, so a
+		// doomed-to-fail order never actually hits the exchange.
+		if (deltaNotionalUsd < HL_MIN_NOTIONAL_USD) {
+			if (wasNewPosition && isIncrease) {
+				// Bump a brand-new open up to the floor, with a small buffer —
+				// rounding deltaSize to szDecimals can otherwise undershoot
+				// back below $10 and get rejected right back (seen live: a
+				// $10.00 target rounded down to $9.997).
+				deltaNotionalUsd = HL_MIN_NOTIONAL_USD * 1.02;
+			} else {
+				// An already-tracked position's top-up (or a reduce) landing
+				// below the floor genuinely cannot be placed at all — HL
+				// would reject it identically every cycle. Leave it for next
+				// cycle, when targetMarginUsd has drifted further from
+				// entry.marginUsd, instead of hammering the exchange with a
+				// guaranteed-rejected order every poll.
+				state[baseId] = { ...entry, leverage, isBuy };
+				return;
+			}
+		}
+
 		// Only hit the leverage-update endpoint when it's actually changing ;
 		// shaves a round trip off the common case (margin adjustment at
 		// unchanged leverage).
-		if (!dryRun && (entry.leverage !== leverage || !entry.ourBaseShortId)) {
+		if (!dryRun && (entry.leverage !== leverage || wasNewPosition)) {
 			await hl.setLeverage(coin, leverage);
 		}
 
-		const szDecimals = this.szDecimalsByCoin[coin] ?? 4;
-		const isIncrease = deltaMarginUsd > 0;
-		const deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
 		const deltaSize = parseFloat((deltaNotionalUsd / price).toFixed(szDecimals));
 
 		if (deltaSize <= 0) {
@@ -266,14 +304,19 @@ export class PositionSync {
 		// existing position automatically (same primitive a full close uses,
 		// just with a partial size here).
 		const orderIsBuy = isIncrease ? isBuy : !isBuy;
-		const wasNewPosition = !entry.ourBaseShortId;
+
+		// The margin this order actually moves, computed from the real
+		// (rounded, possibly floor-bumped) order size rather than the
+		// pre-rounding target, so tracked state matches what actually executes.
+		const actualDeltaMarginUsd = (deltaSize * price) / leverage;
+		const finalMarginUsd = entry.marginUsd + (isIncrease ? actualDeltaMarginUsd : -actualDeltaMarginUsd);
 
 		if (dryRun) {
 			state[baseId] = {
 				coin,
 				isBuy,
 				leverage,
-				marginUsd: targetMarginUsd,
+				marginUsd: finalMarginUsd,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
 				ownerUsername: investment.owner?.username,
@@ -289,7 +332,7 @@ export class PositionSync {
 				traderPercent: rawPercent,
 				clampedPercent: clampedFraction * 100,
 				marginUsdBefore: entry.marginUsd,
-				marginUsdAfter: targetMarginUsd,
+				marginUsdAfter: finalMarginUsd,
 				wouldOrderSize: deltaSize,
 				wouldOrderSide: orderIsBuy ? 'buy' : 'sell',
 			});
@@ -298,9 +341,29 @@ export class PositionSync {
 
 		let orderResult: unknown;
 		try {
-			orderResult = await hl.placeMarketOrder(coin, orderIsBuy, deltaSize.toString());
+			orderResult = await hl.placeMarketOrder(coin, orderIsBuy, deltaSize.toString(), szDecimals);
 		} catch (e: any) {
 			log({ type: 'error', source: 'hl_order', baseId, coin, message: e.message });
+			return;
+		}
+
+		// HL responds 200 OK even when it rejected the order outright (e.g. an
+		// invalid price); the real outcome is nested in the response body.
+		// Trusting an unfilled order here would tag state/Invo as opened when
+		// nothing actually happened on the exchange — leave both untouched so
+		// the same delta gets retried, unchanged, next cycle.
+		const fillError = orderFillError(orderResult);
+		if (fillError) {
+			log({
+				type: 'order_rejected',
+				source: 'hl_order',
+				baseId,
+				coin,
+				message: fillError,
+				deltaSize,
+				notionalUsd: deltaSize * price,
+				hlResult: orderResult,
+			});
 			return;
 		}
 
@@ -308,7 +371,7 @@ export class PositionSync {
 		let invoResult: any = null;
 
 		if (wasNewPosition) {
-			ourBaseShortId = genBaseShortId();
+			ourBaseShortId = genBaseShortId(); // fallback only; overwritten below on a successful recordOpen
 			try {
 				invoResult = await invo.recordOpen({
 					clientTxId: randomUUID(),
@@ -324,6 +387,18 @@ export class PositionSync {
 						sourcePaperTradeBaseId: baseId,
 					},
 				});
+				// /dex/position/create assigns its OWN record id server-side —
+				// it hard-rejects a client-supplied one (confirmed: a prior
+				// attempt to send our generated id as `baseShortId` got a 400
+				// unrecognized_keys). recordClose's `baseShortId` has to be
+				// THIS id, not a client-generated one Invo never learned;
+				// positionRecordId/eventId/tradeId are the same value in
+				// every observed response, so take whichever is present.
+				const invoAssignedId =
+					invoResult?.data?.positionRecordId ?? invoResult?.data?.tradeId ?? invoResult?.data?.eventId;
+				if (invoResult?.success && invoAssignedId) {
+					ourBaseShortId = invoAssignedId;
+				}
 			} catch (e: any) {
 				invoResult = { error: e.message };
 			}
@@ -333,7 +408,7 @@ export class PositionSync {
 			coin,
 			isBuy,
 			leverage,
-			marginUsd: targetMarginUsd,
+			marginUsd: finalMarginUsd,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,
@@ -350,7 +425,7 @@ export class PositionSync {
 			traderPercent: rawPercent,
 			clampedPercent: clampedFraction * 100,
 			marginUsdBefore: entry.marginUsd,
-			marginUsdAfter: targetMarginUsd,
+			marginUsdAfter: finalMarginUsd,
 			orderSize: deltaSize,
 			orderSide: orderIsBuy ? 'buy' : 'sell',
 			hlResult: orderResult,
@@ -379,7 +454,19 @@ export class PositionSync {
 			return;
 		}
 
-		const closeResult = await hl.closePosition(entry.coin);
+		const szDecimals = this.szDecimalsByCoin[entry.coin] ?? 4;
+		const closeResult = await hl.closePosition(entry.coin, szDecimals);
+
+		// Same trap as opens: a 200 OK can still mean the exchange rejected
+		// the order. If it did, the real position is still open — do NOT
+		// drop tracking for it, or it'll be silently forgotten while still
+		// live on the wallet.
+		const fillError = orderFillError(closeResult);
+		if (fillError) {
+			log({ type: 'order_rejected', source: 'hl_close', baseId, coin: entry.coin, message: fillError, hlResult: closeResult });
+			return;
+		}
+
 		let invoResult: any = null;
 		try {
 			invoResult = await invo.recordClose({

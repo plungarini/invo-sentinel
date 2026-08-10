@@ -28,9 +28,18 @@ export class Reconciler {
 	) {}
 
 	async run(): Promise<void> {
+		// Cheap start/end markers with wall-clock duration — the previous two
+		// live incidents (see INCIDENT_LOG.md) both required attaching a
+		// debugger to a hung process mid-incident to even confirm WHEN a
+		// stuck cycle started; a timestamped log line at each phase boundary
+		// means that's readable straight from the logs afterward instead.
+		const cycleStartedAt = Date.now();
+		this.log({ type: 'cycle_start' });
+
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
 		const portfolios = await this.poller.fetchFollowedPortfolios();
+		this.log({ type: 'cycle_checkpoint', stage: 'portfolios_fetched', count: portfolios.length });
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];
 		for (const portfolio of portfolios) {
@@ -60,6 +69,13 @@ export class Reconciler {
 
 		for (const { portfolio, investments } of perPortfolio) {
 			if (!investments) continue;
+			this.log({
+				type: 'cycle_checkpoint',
+				stage: 'portfolio_start',
+				portfolioId: portfolio.id,
+				title: portfolio.title,
+				investmentCount: investments.length,
+			});
 
 			const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 			for (const investment of investments) {
@@ -104,6 +120,50 @@ export class Reconciler {
 			}
 			if (ignoredChanged) this.ignoredStore.save(ignored);
 		}
+
+		// The close-detection loop above only ever runs for portfolios still
+		// in `perPortfolio` (i.e. still followed right now). If a whole
+		// portfolio is unfollowed — not just one investment closing on the
+		// trader's side — any baseId tracked from it is never visited by
+		// that loop again, ever, so it'd otherwise be silently forgotten
+		// (not even flagged, since `logUntrackedPositions` only flags coins
+		// with NO state entry at all — this one still has one).
+		//
+		// Deliberately NOT closing it: unfollowing is a decision about
+		// stopping automated management, not an instruction to flatten a
+		// real position — especially not one that might be sitting at a
+		// loss. Stop tracking it (delete from state, place no order at all)
+		// so it becomes a plain untracked wallet position the user handles
+		// manually; `logUntrackedPositions` will now correctly flag it.
+		// Skip entries with no portfolioId at all (manually `npm run
+		// adopt`ed positions never have one) — those were never tied to a
+		// followed portfolio to begin with.
+		const followedPortfolioIds = new Set(portfolios.map((p) => p.id));
+		let untrackedUnfollowed = false;
+		for (const [baseId, entry] of Object.entries(state)) {
+			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
+			this.log({
+				type: 'untracking_unfollowed_portfolio_position',
+				baseId,
+				coin: entry.coin,
+				trader: entry.ownerUsername,
+				portfolioId: entry.portfolioId,
+				reason:
+					'portfolio no longer followed; stopping tracking WITHOUT closing — real position left exactly as-is on the wallet for manual handling',
+			});
+			delete state[baseId];
+			untrackedUnfollowed = true;
+		}
+		if (untrackedUnfollowed) this.stateStore.save(state);
+		let unfollowedIgnoredChanged = false;
+		for (const [baseId, entry] of Object.entries(ignored)) {
+			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
+			delete ignored[baseId];
+			unfollowedIgnoredChanged = true;
+		}
+		if (unfollowedIgnoredChanged) this.ignoredStore.save(ignored);
+
+		this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt });
 	}
 
 	/**

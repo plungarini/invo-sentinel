@@ -16,6 +16,14 @@ export interface StaleEntryConfig {
 	maxProfitPct: number;
 }
 
+export interface StaleEntryVerdict {
+	skip: boolean;
+	/** Once true, this baseId must never be opened, no matter how its PnL moves later. */
+	permanent: boolean;
+	ageMinutes: number;
+	pnlPercent: number;
+}
+
 /**
  * The trader's own leveraged return %, i.e. what they'd see as their
  * position's PnL% — not the raw underlying price move.
@@ -30,11 +38,30 @@ export function computeInvestmentPnlPercent(
 	return priceMovePct * investment.leverage * 100;
 }
 
-export function isStaleProfitableEntry(
+/**
+ * Two-tier gate, re-evaluated every cycle a baseId is still untracked:
+ *
+ *  - Older than maxAgeMinutes → permanently skip, regardless of current
+ *    PnL. Age alone disqualifies it: a trade idea that old is no longer
+ *    "fresh" to mirror, whatever its PnL happens to be at the moment a
+ *    same-coin conflict clears or the daemon first sees it.
+ *  - Still within the fresh window, but already up more than
+ *    maxProfitPct → skip for now, but NOT permanently. A trade that
+ *    pumped immediately at entry can still cool back off before the
+ *    window expires; re-checked fresh next cycle. Once the window does
+ *    expire, the permanent rule above takes over unconditionally.
+ */
+export function evaluateStaleEntry(
 	investment: Pick<OpenInvestment, 'createdAt' | 'directionLong' | 'leverage' | 'entryPrice' | 'currentPrice'>,
 	config: StaleEntryConfig,
-): boolean {
+): StaleEntryVerdict {
 	const ageMinutes = (Date.now() - new Date(investment.createdAt).getTime()) / 60_000;
-	if (!(ageMinutes > config.maxAgeMinutes)) return false;
-	return computeInvestmentPnlPercent(investment) > config.maxProfitPct;
+	const pnlPercent = computeInvestmentPnlPercent(investment);
+	if (ageMinutes > config.maxAgeMinutes) {
+		return { skip: true, permanent: true, ageMinutes, pnlPercent };
+	}
+	if (pnlPercent > config.maxProfitPct) {
+		return { skip: true, permanent: false, ageMinutes, pnlPercent };
+	}
+	return { skip: false, permanent: false, ageMinutes, pnlPercent };
 }

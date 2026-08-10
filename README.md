@@ -75,11 +75,22 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 
 ### Skipping stale, already-profitable entries
 
-Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception. If a followed trader's investment is older than `STALE_ENTRY_MAX_AGE_MINUTES` **and** already up more than `STALE_ENTRY_MAX_PROFIT_PCT`% (their own leveraged PnL%, not raw price move), it's skipped rather than opened.
+Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
 
-This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing. This rule catches that (and the same case without any conflict involved — any investment that's simply already old and profitable by the time this daemon first sees it, e.g. on startup).
+- **Older than `STALE_ENTRY_MAX_AGE_MINUTES`** → permanently skipped, no matter its current PnL. This is the primary gate: a trade idea past its freshness window doesn't get a second look based on how it happens to be doing at the exact moment this daemon considers it.
+- **Still within that window, but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`%** (its own leveraged PnL%, not raw price move) → skipped for *this cycle only*, not permanently. A trade that pumped immediately at entry can still cool back off before the window expires; it's re-checked fresh next cycle. Once the window does expire, the permanent rule above takes over regardless of PnL.
 
-Once skipped, that baseId is permanently ignored — not retried next cycle, not reconsidered if its PnL later dips back under the threshold — for as long as that specific investment stays open on the trader's side. It's recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. The moment that baseId actually closes on the trader's side, the ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
+This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing, so it's blocked purely on age, whatever B's PnL happens to be right then. The same rule also catches the case without any conflict involved — any investment that's simply already old by the time this daemon first sees it, e.g. on startup.
+
+A permanent skip is recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. A temporary, still-fresh skip is logged as `fresh_entry_profit_skip` and doesn't touch `.copy-ignored.json` at all. The moment a permanently-ignored baseId actually closes on the trader's side, its ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
+
+### Hyperliquid's minimum order size
+
+Hyperliquid rejects any order below $10 notional outright, independent of anything this project configures. On a small account with a tight `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` band and a low-leverage coin, the clamped target margin can easily compute to a notional under that floor — a real trade that would otherwise just never open, cycle after cycle, until it's eventually skipped by the stale-entry rule above for having gone unfilled too long.
+
+Consistent with "resize, don't skip": a **brand-new open** whose computed order would land under $10 is bumped up to just over $10 notional (a small buffer, since rounding the order size to the coin's tick precision can otherwise undershoot back below the floor and get rejected right back) instead of being attempted at the smaller size. An **incremental top-up** (or a small reduce) on an already-tracked position that lands under $10 genuinely cannot be placed at all — Hyperliquid would reject it identically every cycle — so it's left completely untouched and retried next cycle once `targetMarginUsd` has drifted further, rather than repeatedly hammering the exchange with an order guaranteed to fail.
+
+Any order Hyperliquid still rejects for another reason is logged as `order_rejected` and left completely untouched — no state or Invo record is written for it — so the exact same delta is retried again next cycle instead of silently corrupting local tracking.
 
 ### External monitoring (optional)
 
@@ -100,6 +111,25 @@ Leave it unset and none of this runs at all.
 | `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                           |
 | `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict (see below)            |
 | `npm run close -- <coin>`                                               | Emergency manual close; stopping the daemon does **not** close open positions |
+| `npm run reconcile -- --hours=6`                                        | Read-only audit; see below                                                    |
+
+## Auditing what actually happened (`npm run reconcile`)
+
+The live daemon's own logs are a record of what it *decided* to do, not independent proof that it was right. `npm run reconcile -- --hours=6` (window defaults to 6) cross-checks recent behavior against two sources this daemon never otherwise consults:
+
+- **Invo's own closed-investment history** (`isOpen: false` — the live reconciler only ever looks at `isOpen: true`) — the trader's actual full/partial-close record, independent of anything we logged.
+- **Hyperliquid's own `userFills`** — the exchange's ground-truth fill history, matched back to our logs by order id (`oid`), independent of anything Invo or our own state claims happened.
+
+It flags:
+
+- `unexplained_untracked_open` — a trader's open position we're neither tracking, ignoring, nor have a conflict log explaining.
+- `missed_close` — a trader closed something we were tracking, and we have no `closed` log event for it at all.
+- `delayed_close` — we did close it, just unusually slowly (>5 min after the trader).
+- `unverified_fill` — we logged an order as filled with a given `oid`, but HL's own fill history in the window has no matching entry.
+- `open_never_filled` (informational) — we logged `opened` but the order itself never actually filled and later found no real position to close; expected, not a missed close.
+- `position_closed_externally` — the open genuinely filled real money on Hyperliquid, but no `closed` event from this daemon exists anywhere — something else placed a real closing order on this wallet using the same agent key, entirely outside this daemon (e.g. Invo's own official "Mimic" feature, if also separately enabled on the same trader through the app itself, would have signing authority over the same wallet). Includes the actual closing fill looked up from HL's own record (time, direction, `oid`, realized PnL) for context.
+
+Read-only: places no orders, changes no state. Exits non-zero only if it found anything above `info` severity.
 
 ## Running continuously (survive reboots and crashes)
 
@@ -223,6 +253,7 @@ Things worth knowing if you're reading the code or extending it:
 - **No exchange-side TP/SL.** This account's phantom-agent key signing has two independently confirmed breakages tied to specific Hyperliquid order fields; `reduce_only: true`, and `grouping: 'normalTpsl'` (both silently produce wrong signature recovery). A stop/trigger order is a third, never-tested field combination on that same fragile signer. Exits mirror the trader's own close instead.
 - **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead. The one deliberate exception: a stale, already-profitable entry is skipped outright rather than resized — see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries).
 - **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
+- **Every HL/Invo network call has a 15s timeout.** A hung connection with no timeout blocks the entire reconcile cycle indefinitely with nothing ever thrown — no error log, no crash, just silence until something external (a manual restart) breaks the stall. Bounded so a stall becomes an ordinary caught error instead, retried next cycle.
 
 ## Disclaimer
 

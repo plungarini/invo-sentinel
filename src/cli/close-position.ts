@@ -1,6 +1,6 @@
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { HyperliquidClient } from '../clients/hyperliquid-client.js';
+import { HyperliquidClient, orderFillError } from '../clients/hyperliquid-client.js';
 import { loadConfig } from '../config/env.js';
 import { createLogger } from '../services/logger.js';
 import { StateStore } from '../services/state-store.js';
@@ -39,7 +39,16 @@ async function main() {
 	}
 
 	const qtyBefore = pos.szi;
-	const closeResult = await hl.closePosition(coin);
+	const meta = await hl.getMeta();
+	const szDecimals = meta.universe.find((a) => a.name === coin)?.szDecimals ?? 4;
+	const closeResult = await hl.closePosition(coin, szDecimals);
+
+	const fillError = orderFillError(closeResult);
+	if (fillError) {
+		console.error(`Close order rejected by Hyperliquid: ${fillError}`);
+		console.error(JSON.stringify(closeResult, null, 2));
+		process.exit(1);
+	}
 
 	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
 	const state = stateStore.load();
