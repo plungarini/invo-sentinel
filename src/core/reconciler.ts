@@ -125,32 +125,36 @@ export class Reconciler {
 		// in `perPortfolio` (i.e. still followed right now). If a whole
 		// portfolio is unfollowed — not just one investment closing on the
 		// trader's side — any baseId tracked from it is never visited by
-		// that loop again, ever: it's permanently orphaned, silently
-		// forgotten, and no other check (existing_position_conflict,
-		// logUntrackedPositions) catches it either, since it's still
-		// genuinely "tracked". Unfollowing means stop mirroring that trader
-		// entirely, so close it now, the same as if they'd closed it
-		// themselves. Skip entries with no portfolioId at all (manually
-		// `npm run adopt`ed positions never have one) — those aren't tied to
-		// a followed portfolio to begin with and should be left alone.
+		// that loop again, ever, so it'd otherwise be silently forgotten
+		// (not even flagged, since `logUntrackedPositions` only flags coins
+		// with NO state entry at all — this one still has one).
+		//
+		// Deliberately NOT closing it: unfollowing is a decision about
+		// stopping automated management, not an instruction to flatten a
+		// real position — especially not one that might be sitting at a
+		// loss. Stop tracking it (delete from state, place no order at all)
+		// so it becomes a plain untracked wallet position the user handles
+		// manually; `logUntrackedPositions` will now correctly flag it.
+		// Skip entries with no portfolioId at all (manually `npm run
+		// adopt`ed positions never have one) — those were never tied to a
+		// followed portfolio to begin with.
 		const followedPortfolioIds = new Set(portfolios.map((p) => p.id));
+		let untrackedUnfollowed = false;
 		for (const [baseId, entry] of Object.entries(state)) {
 			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
 			this.log({
-				type: 'closing_unfollowed_portfolio_position',
+				type: 'untracking_unfollowed_portfolio_position',
 				baseId,
 				coin: entry.coin,
 				trader: entry.ownerUsername,
 				portfolioId: entry.portfolioId,
-				reason: 'portfolio no longer followed; would never be revisited by the per-portfolio close check again',
+				reason:
+					'portfolio no longer followed; stopping tracking WITHOUT closing — real position left exactly as-is on the wallet for manual handling',
 			});
-			try {
-				await this.sync.close(baseId, state);
-			} catch (e: any) {
-				this.log({ type: 'error', source: 'close_unfollowed_portfolio', baseId, coin: entry.coin, message: e.message });
-			}
-			this.stateStore.save(state);
+			delete state[baseId];
+			untrackedUnfollowed = true;
 		}
+		if (untrackedUnfollowed) this.stateStore.save(state);
 		let unfollowedIgnoredChanged = false;
 		for (const [baseId, entry] of Object.entries(ignored)) {
 			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
