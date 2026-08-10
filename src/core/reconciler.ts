@@ -28,9 +28,18 @@ export class Reconciler {
 	) {}
 
 	async run(): Promise<void> {
+		// Cheap start/end markers with wall-clock duration — the previous two
+		// live incidents (see INCIDENT_LOG.md) both required attaching a
+		// debugger to a hung process mid-incident to even confirm WHEN a
+		// stuck cycle started; a timestamped log line at each phase boundary
+		// means that's readable straight from the logs afterward instead.
+		const cycleStartedAt = Date.now();
+		this.log({ type: 'cycle_start' });
+
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
 		const portfolios = await this.poller.fetchFollowedPortfolios();
+		this.log({ type: 'cycle_checkpoint', stage: 'portfolios_fetched', count: portfolios.length });
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];
 		for (const portfolio of portfolios) {
@@ -60,6 +69,13 @@ export class Reconciler {
 
 		for (const { portfolio, investments } of perPortfolio) {
 			if (!investments) continue;
+			this.log({
+				type: 'cycle_checkpoint',
+				stage: 'portfolio_start',
+				portfolioId: portfolio.id,
+				title: portfolio.title,
+				investmentCount: investments.length,
+			});
 
 			const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 			for (const investment of investments) {
@@ -142,6 +158,8 @@ export class Reconciler {
 			unfollowedIgnoredChanged = true;
 		}
 		if (unfollowedIgnoredChanged) this.ignoredStore.save(ignored);
+
+		this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt });
 	}
 
 	/**
