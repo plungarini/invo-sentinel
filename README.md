@@ -73,6 +73,34 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 
 `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` can also be passed positionally, overriding `.env`: `npm run start -- 2 5`.
 
+### Per-portfolio risk overrides
+
+`MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` in `.env` are the default band for every followed portfolio — but you can give any specific one its own band instead, e.g. a trader you trust more (or less) than the rest.
+
+`.copy-portfolio-risk.json` (gitignored, not committed) holds this. It's auto-maintained every poll cycle to always reflect who you actually follow right now — you never create or delete entries yourself:
+
+```json
+[
+  {
+    "portfolioId": "3de730c5-d1b9-4e5d-be79-66375fc02910",
+    "title": "Scalp Company",
+    "ownerUsername": "archiduc",
+    "minMarginPct": null,
+    "maxMarginPct": null
+  }
+]
+```
+
+- Newly followed → a blank entry (`null`/`null`) appears on the very next cycle.
+- Unfollowed → its entry disappears on the very next cycle.
+- `title`/`ownerUsername` are just for your own readability when hand-editing the file — purely cosmetic, kept fresh automatically, never used for any decision.
+- **To set a custom band**, edit `minMarginPct`/`maxMarginPct` for that portfolio directly in the file — same whole-number-percent convention as `.env` (e.g. `5` for 5%), not a fraction. `null` on either field falls back to that field's `.env` value; you can override just one and leave the other `null`.
+- Your edits are never overwritten — the file is only rewritten when the followed set or a title/owner actually changes, not on every cycle.
+- An invalid custom band (min above max, or negative) is rejected **entirely** — falls back to the full `.env` band for that portfolio, logged once as `invalid_portfolio_risk_override`, rather than silently clamping into something arbitrary.
+- Leverage cap (`MAX_LEVERAGE`) is **not** overridable per portfolio — global only.
+
+A successful override is logged once as `portfolio_risk_override_applied` (re-logged only if you actually change the values, not every cycle).
+
 ### Skipping stale, already-profitable entries
 
 Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
