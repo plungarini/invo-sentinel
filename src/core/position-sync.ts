@@ -22,7 +22,6 @@ export interface PositionSyncOptions {
 	hl: HyperliquidClient;
 	invo: InvoClient;
 	log: Logger;
-	risk: RiskConfig;
 	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
@@ -55,6 +54,9 @@ export class PositionSync {
 	 * Opens a brand-new tracked trade, adjusts an existing one toward the
 	 * trader's current margin %, or auto-adopts / flags a pre-existing real
 	 * position it just discovered. Mutates `state` in place; caller persists.
+	 * `risk` is per-call, not fixed at construction — the caller resolves
+	 * it per-portfolio (see `resolvePortfolioRisk`) since a followed
+	 * portfolio may have its own margin-band override.
 	 */
 	async openOrAdjust(
 		baseId: string,
@@ -62,8 +64,9 @@ export class PositionSync {
 		state: PositionStateMap,
 		investmentsByCoin: Map<string, OpenInvestment[]>,
 		ignored: IgnoredTradesMap,
+		risk: RiskConfig,
 	): Promise<void> {
-		const { log, risk, staleEntry, dryRun, hl, invo } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
