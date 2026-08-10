@@ -9,6 +9,7 @@ import { Reconciler } from '../core/reconciler.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger } from '../services/logger.js';
+import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { StateStore } from '../services/state-store.js';
 
 // No Claude/LLM in this loop. Mechanically mirrors every open/adjust/close
@@ -73,17 +74,17 @@ async function main() {
 	const meta = await hl.getMeta();
 	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
 	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, '.copy-ignored.json'), log);
+	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, '.copy-portfolio-risk.json'), log);
 	const sync = new PositionSync({
 		hl,
 		invo,
 		log,
-		risk: config.risk,
 		staleEntry: config.staleEntry,
 		dryRun,
 		assetMeta: meta.universe,
 	});
 	const poller = new PortfolioPoller(invo, log);
-	const reconciler = new Reconciler(poller, sync, hl, stateStore, ignoredStore, log);
+	const reconciler = new Reconciler(poller, sync, hl, stateStore, ignoredStore, portfolioRiskStore, config.risk, log);
 
 	log({
 		type: 'started',
@@ -95,6 +96,7 @@ async function main() {
 		pollIntervalMs: config.pollIntervalMs,
 		trackedPositions: Object.keys(stateStore.load()).length,
 		ignoredTrades: Object.keys(ignoredStore.load()).length,
+		portfolioRiskOverrides: portfolioRiskStore.load().filter((e) => e.minMarginPct != null || e.maxMarginPct != null).length,
 		dryRun,
 	});
 
