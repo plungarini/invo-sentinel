@@ -1,8 +1,10 @@
 import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import type { Logger } from '../services/logger.js';
+import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
+import { resolvePortfolioRisk } from '../services/risk-policy.js';
 import type { StateStore } from '../services/state-store.js';
-import type { FollowedPortfolio, OpenInvestment } from '../types.js';
+import type { FollowedPortfolio, OpenInvestment, RiskConfig } from '../types.js';
 import type { PortfolioPoller } from './portfolio-poller.js';
 import type { PositionSync } from './position-sync.js';
 
@@ -18,12 +20,19 @@ import type { PositionSync } from './position-sync.js';
  * up front, not a partial one.
  */
 export class Reconciler {
+	/** Portfolios currently in an invalid-override state, so the warning is logged once on entry, not every cycle. */
+	private invalidOverridePortfolioIds = new Set<string>();
+	/** Last-logged override signature per portfolio ("min|max"), so a change re-logs but a steady override doesn't spam every cycle. */
+	private loggedOverrideSignature = new Map<string, string>();
+
 	constructor(
 		private poller: PortfolioPoller,
 		private sync: PositionSync,
 		private hl: HyperliquidClient,
 		private stateStore: StateStore,
 		private ignoredStore: IgnoredTradesStore,
+		private portfolioRiskStore: PortfolioRiskStore,
+		private globalRisk: RiskConfig,
 		private log: Logger,
 	) {}
 
@@ -40,6 +49,7 @@ export class Reconciler {
 		const ignored = this.ignoredStore.load();
 		const portfolios = await this.poller.fetchFollowedPortfolios();
 		this.log({ type: 'cycle_checkpoint', stage: 'portfolios_fetched', count: portfolios.length });
+		const riskEntries = this.portfolioRiskStore.sync(portfolios);
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];
 		for (const portfolio of portfolios) {
@@ -77,10 +87,36 @@ export class Reconciler {
 				investmentCount: investments.length,
 			});
 
+			const portfolioOverride = riskEntries.find((e) => e.portfolioId === portfolio.id);
+			const { risk, overridden, invalidOverrideReason } = resolvePortfolioRisk(this.globalRisk, portfolioOverride);
+			if (invalidOverrideReason) {
+				if (!this.invalidOverridePortfolioIds.has(portfolio.id)) {
+					this.invalidOverridePortfolioIds.add(portfolio.id);
+					this.log({ type: 'invalid_portfolio_risk_override', portfolioId: portfolio.id, title: portfolio.title, reason: invalidOverrideReason });
+				}
+			} else {
+				this.invalidOverridePortfolioIds.delete(portfolio.id);
+			}
+			if (overridden) {
+				const signature = `${risk.minMarginPct}|${risk.maxMarginPct}`;
+				if (this.loggedOverrideSignature.get(portfolio.id) !== signature) {
+					this.loggedOverrideSignature.set(portfolio.id, signature);
+					this.log({
+						type: 'portfolio_risk_override_applied',
+						portfolioId: portfolio.id,
+						title: portfolio.title,
+						minMarginPct: risk.minMarginPct * 100,
+						maxMarginPct: risk.maxMarginPct * 100,
+					});
+				}
+			} else {
+				this.loggedOverrideSignature.delete(portfolio.id);
+			}
+
 			const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 			for (const investment of investments) {
 				try {
-					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored);
+					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk);
 				} catch (e: any) {
 					this.log({
 						type: 'error',
