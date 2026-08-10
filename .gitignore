@@ -4,3 +4,4 @@ dist/
 logs/
 .copy-state.json
 .copy-ignored.json
+INCIDENT_LOG.md
