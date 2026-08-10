@@ -2,6 +2,11 @@ import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../typ
 
 const BASE = 'https://api.invoapp.com';
 const MAX_RATE_LIMIT_RETRIES = 3;
+// A hung connection here (no timeout) blocks the whole reconcile cycle
+// indefinitely with nothing ever thrown — silent, no error log, no crash,
+// just no forward progress. Bounded so a stall becomes an ordinary
+// catchable error instead, retried next cycle.
+const INVO_FETCH_TIMEOUT_MS = 15_000;
 
 export interface RecordOpenPayload {
 	clientTxId: string;
@@ -70,6 +75,7 @@ export class InvoClient {
 					'x-app-version': '0.0.75',
 					'x-platform': 'web',
 				},
+				signal: AbortSignal.timeout(INVO_FETCH_TIMEOUT_MS),
 			});
 			if (resp.status !== 200) return false;
 			const data = await resp.json();
@@ -114,6 +120,7 @@ export class InvoClient {
 				'x-platform': 'web',
 			},
 			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(INVO_FETCH_TIMEOUT_MS),
 		});
 
 		const text = await resp.text();

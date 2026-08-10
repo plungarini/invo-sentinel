@@ -111,6 +111,37 @@ deploy to confirm `invoResult.success:true` instead of the 404. If it still
 fails, hypothesis #2 (trader's own `investment.baseShortId`) is next in line
 per the research agent's ranked list.
 
+## 2026-08-10 ~01:55 CEST — user's healthcheck monitor reported ~8 minutes of downtime
+
+User got an external healthchecks.io "down" alert (~8 minutes) shortly after
+the recordClose deploy. Investigated:
+
+- Live daemon was healthy at time of report: continuous 5-7s reconcile
+  cycles, zero errors/fatal, for 1h40m straight.
+- The only service restart in the relevant window (00:13:35) was a clean,
+  ~2-second systemd stop/start (confirmed via journal timestamps) — nowhere
+  near 8 minutes on its own. That alone doesn't explain the report.
+- **Root cause found**: none of the 7 raw `fetch()` calls across
+  `hyperliquid-client.ts` and `invo-client.ts` (Invo POSTs, HL /info calls)
+  had a timeout — only `healthcheck.ts`'s own ping did. A single hung/stalled
+  connection on any of them would block the entire `reconciler.run()` cycle
+  **indefinitely**, with nothing ever thrown — no error log, no crash, just
+  silence, exactly matching "8 minutes down, nothing in the logs." An 8-minute
+  silent stall is consistent with a mid-size CDN/load-balancer edge timeout
+  on a stalled TCP connection (well short of the OS-level default, which
+  would be much longer).
+- **Fixed** (`bugfix/fetch-timeouts`): every HL/Invo fetch now has a 15s
+  `AbortSignal.timeout`. A stall now surfaces as an ordinary caught error
+  (logged, `pingFail` fires) instead of hanging forever; the next 5s poll
+  cycle retries normally. Scoped to read/info calls only — deliberately did
+  NOT add a timeout to the HL SDK's own `placeOrder`/`updateLeverage` calls
+  (order placement), since aborting an order request doesn't guarantee it
+  didn't process server-side; retrying after an aborted order risks a
+  double-fill. That's a separate, harder problem to solve safely and needs
+  more thought before touching it — noted here rather than rushed.
+- Verified: typecheck clean, a live dry-run cycle completed normally with the
+  change in place (no regressions), state file unaffected.
+
 ## 2026-08-10 — overnight/next-day regime starts
 
 User will be unreachable until afternoon. New standing instructions:
