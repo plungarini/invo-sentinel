@@ -106,3 +106,19 @@ export interface ClosedInvestment extends OpenInvestment {
 	closingPrice: number | null;
 	reasonClosed: string | null;
 }
+
+/**
+ * One followed portfolio's margin-band override, persisted to
+ * `.copy-portfolio-risk.json`. `title`/`ownerUsername` are display-only,
+ * kept fresh automatically, never used for logic. `minMarginPct`/
+ * `maxMarginPct` are whole-number percent (matching `.env`'s
+ * MIN_MARGIN_PCT/MAX_MARGIN_PCT convention, e.g. 3 for 3%) — `null` means
+ * "no override, use the .env default for this field".
+ */
+export interface PortfolioRiskEntry {
+	portfolioId: string;
+	title: string;
+	ownerUsername?: string;
+	minMarginPct: number | null;
+	maxMarginPct: number | null;
+}
