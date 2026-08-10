@@ -371,7 +371,18 @@ export class PositionSync {
 		let invoResult: any = null;
 
 		if (wasNewPosition) {
-			ourBaseShortId = genBaseShortId(); // fallback only; overwritten below on a successful recordOpen
+			// recordClose's `baseShortId` is confirmed <=10 characters (live
+			// evidence: sending recordOpen's server-assigned UUID got a 400
+			// "Too big: expected string to have <=10 characters" — ruling that
+			// out definitively). A client-generated 10-char id was tried first
+			// and got 404 NOT_FOUND (right format, but Invo never learned that
+			// specific value — recordOpen's schema hard-rejects a client-
+			// supplied baseShortId outright). The trader's OWN
+			// investment.baseShortId is the one remaining 10-char-format
+			// candidate available, and it's exactly what Invo's own
+			// /dex/trade mimic-tracking is keyed by — next best-evidenced
+			// guess, not yet confirmed either way.
+			ourBaseShortId = investment.baseShortId;
 			try {
 				invoResult = await invo.recordOpen({
 					clientTxId: randomUUID(),
@@ -387,18 +398,6 @@ export class PositionSync {
 						sourcePaperTradeBaseId: baseId,
 					},
 				});
-				// /dex/position/create assigns its OWN record id server-side —
-				// it hard-rejects a client-supplied one (confirmed: a prior
-				// attempt to send our generated id as `baseShortId` got a 400
-				// unrecognized_keys). recordClose's `baseShortId` has to be
-				// THIS id, not a client-generated one Invo never learned;
-				// positionRecordId/eventId/tradeId are the same value in
-				// every observed response, so take whichever is present.
-				const invoAssignedId =
-					invoResult?.data?.positionRecordId ?? invoResult?.data?.tradeId ?? invoResult?.data?.eventId;
-				if (invoResult?.success && invoAssignedId) {
-					ourBaseShortId = invoAssignedId;
-				}
 			} catch (e: any) {
 				invoResult = { error: e.message };
 			}
