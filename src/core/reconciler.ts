@@ -104,6 +104,44 @@ export class Reconciler {
 			}
 			if (ignoredChanged) this.ignoredStore.save(ignored);
 		}
+
+		// The close-detection loop above only ever runs for portfolios still
+		// in `perPortfolio` (i.e. still followed right now). If a whole
+		// portfolio is unfollowed — not just one investment closing on the
+		// trader's side — any baseId tracked from it is never visited by
+		// that loop again, ever: it's permanently orphaned, silently
+		// forgotten, and no other check (existing_position_conflict,
+		// logUntrackedPositions) catches it either, since it's still
+		// genuinely "tracked". Unfollowing means stop mirroring that trader
+		// entirely, so close it now, the same as if they'd closed it
+		// themselves. Skip entries with no portfolioId at all (manually
+		// `npm run adopt`ed positions never have one) — those aren't tied to
+		// a followed portfolio to begin with and should be left alone.
+		const followedPortfolioIds = new Set(portfolios.map((p) => p.id));
+		for (const [baseId, entry] of Object.entries(state)) {
+			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
+			this.log({
+				type: 'closing_unfollowed_portfolio_position',
+				baseId,
+				coin: entry.coin,
+				trader: entry.ownerUsername,
+				portfolioId: entry.portfolioId,
+				reason: 'portfolio no longer followed; would never be revisited by the per-portfolio close check again',
+			});
+			try {
+				await this.sync.close(baseId, state);
+			} catch (e: any) {
+				this.log({ type: 'error', source: 'close_unfollowed_portfolio', baseId, coin: entry.coin, message: e.message });
+			}
+			this.stateStore.save(state);
+		}
+		let unfollowedIgnoredChanged = false;
+		for (const [baseId, entry] of Object.entries(ignored)) {
+			if (!entry.portfolioId || followedPortfolioIds.has(entry.portfolioId)) continue;
+			delete ignored[baseId];
+			unfollowedIgnoredChanged = true;
+		}
+		if (unfollowedIgnoredChanged) this.ignoredStore.save(ignored);
 	}
 
 	/**
