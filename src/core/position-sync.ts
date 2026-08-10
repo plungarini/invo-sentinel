@@ -22,7 +22,6 @@ export interface PositionSyncOptions {
 	hl: HyperliquidClient;
 	invo: InvoClient;
 	log: Logger;
-	risk: RiskConfig;
 	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
@@ -55,6 +54,9 @@ export class PositionSync {
 	 * Opens a brand-new tracked trade, adjusts an existing one toward the
 	 * trader's current margin %, or auto-adopts / flags a pre-existing real
 	 * position it just discovered. Mutates `state` in place; caller persists.
+	 * `risk` is per-call, not fixed at construction — the caller resolves
+	 * it per-portfolio (see `resolvePortfolioRisk`) since a followed
+	 * portfolio may have its own margin-band override.
 	 */
 	async openOrAdjust(
 		baseId: string,
@@ -62,8 +64,9 @@ export class PositionSync {
 		state: PositionStateMap,
 		investmentsByCoin: Map<string, OpenInvestment[]>,
 		ignored: IgnoredTradesMap,
+		risk: RiskConfig,
 	): Promise<void> {
-		const { log, risk, staleEntry, dryRun, hl, invo } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
@@ -124,6 +127,80 @@ export class PositionSync {
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,
 		};
+
+		// The user is always free to open/edit/close positions manually on
+		// Hyperliquid directly — this daemon must never crash or fight that.
+		// Everything below (delta sizing) is computed purely from our OWN
+		// `entry.marginUsd`, never cross-checked against the real exchange
+		// position, so a manual edit desyncs that baseline silently unless
+		// resynced here first, before any already-tracked baseId's delta is
+		// computed. Two cases:
+		//  - No real position at all → the user closed it manually while the
+		//    trader's own signal is still open. Respect that as a deliberate
+		//    stop-managing instruction: permanently ignore this baseId
+		//    rather than silently reopening it next cycle (which is exactly
+		//    what would otherwise happen — a fresh, empty `entry` cycling
+		//    right back through the brand-new-open path).
+		//  - Real position exists but its size (or direction) has changed
+		//    manually → resync `entry.marginUsd` to the REAL live size
+		//    before computing the delta, so the next order moves from where
+		//    the position actually is, not from a stale internal guess.
+		if (entry.ourBaseShortId) {
+			const livePositions = await hl.getPositions();
+			const realPosition = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
+			if (!realPosition) {
+				ignored[baseId] = {
+					coin,
+					portfolioId: investment.portfolio?.id,
+					reason: 'tracked position has no matching real HL position anymore — closed manually or externally; permanently stopping management of this specific trade rather than silently reopening it',
+					ignoredAt: new Date().toISOString(),
+				};
+				delete state[baseId];
+				log({
+					type: 'manual_close_detected',
+					baseId,
+					coin,
+					trader: investment.owner?.username,
+					detail: 'no real HL position found for an already-tracked baseId; assuming manual/external close, will not reopen',
+				});
+				return;
+			}
+			const realDirectionMatches = parseFloat(realPosition.szi) > 0 === entry.isBuy;
+			if (!realDirectionMatches) {
+				ignored[baseId] = {
+					coin,
+					portfolioId: investment.portfolio?.id,
+					reason: `real HL position direction (${parseFloat(realPosition.szi) > 0 ? 'long' : 'short'}) no longer matches tracked direction (${entry.isBuy ? 'long' : 'short'}) — manual intervention detected; permanently stopping management of this specific trade`,
+					ignoredAt: new Date().toISOString(),
+				};
+				delete state[baseId];
+				log({
+					type: 'manual_direction_change_detected',
+					baseId,
+					coin,
+					trader: investment.owner?.username,
+					trackedDirection: entry.isBuy ? 'long' : 'short',
+					realDirection: parseFloat(realPosition.szi) > 0 ? 'long' : 'short',
+				});
+				return;
+			}
+			const realPrice = parseFloat(mids[coin]);
+			if (realPrice && entry.leverage) {
+				const realMarginUsd = (Math.abs(parseFloat(realPosition.szi)) * realPrice) / entry.leverage;
+				if (Math.abs(realMarginUsd - entry.marginUsd) >= MIN_ORDER_USD) {
+					log({
+						type: 'resynced_to_live_position',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						trackedMarginUsd: entry.marginUsd,
+						realMarginUsd,
+						detail: 'real HL position size no longer matched tracked margin — resynced before computing this cycle\'s delta',
+					});
+					entry.marginUsd = realMarginUsd;
+				}
+			}
+		}
 
 		// No other tracked baseId owns this coin. There may still be a REAL,
 		// untracked position on it that pre-dates the daemon — wrong
@@ -371,7 +448,18 @@ export class PositionSync {
 		let invoResult: any = null;
 
 		if (wasNewPosition) {
-			ourBaseShortId = genBaseShortId(); // fallback only; overwritten below on a successful recordOpen
+			// recordClose's `baseShortId` is confirmed <=10 characters (live
+			// evidence: sending recordOpen's server-assigned UUID got a 400
+			// "Too big: expected string to have <=10 characters" — ruling that
+			// out definitively). A client-generated 10-char id was tried first
+			// and got 404 NOT_FOUND (right format, but Invo never learned that
+			// specific value — recordOpen's schema hard-rejects a client-
+			// supplied baseShortId outright). The trader's OWN
+			// investment.baseShortId is the one remaining 10-char-format
+			// candidate available, and it's exactly what Invo's own
+			// /dex/trade mimic-tracking is keyed by — next best-evidenced
+			// guess, not yet confirmed either way.
+			ourBaseShortId = investment.baseShortId;
 			try {
 				invoResult = await invo.recordOpen({
 					clientTxId: randomUUID(),
@@ -387,18 +475,6 @@ export class PositionSync {
 						sourcePaperTradeBaseId: baseId,
 					},
 				});
-				// /dex/position/create assigns its OWN record id server-side —
-				// it hard-rejects a client-supplied one (confirmed: a prior
-				// attempt to send our generated id as `baseShortId` got a 400
-				// unrecognized_keys). recordClose's `baseShortId` has to be
-				// THIS id, not a client-generated one Invo never learned;
-				// positionRecordId/eventId/tradeId are the same value in
-				// every observed response, so take whichever is present.
-				const invoAssignedId =
-					invoResult?.data?.positionRecordId ?? invoResult?.data?.tradeId ?? invoResult?.data?.eventId;
-				if (invoResult?.success && invoAssignedId) {
-					ourBaseShortId = invoAssignedId;
-				}
 			} catch (e: any) {
 				invoResult = { error: e.message };
 			}

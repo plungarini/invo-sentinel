@@ -4,4 +4,5 @@ dist/
 logs/
 .copy-state.json
 .copy-ignored.json
+.copy-portfolio-risk.json
 INCIDENT_LOG.md

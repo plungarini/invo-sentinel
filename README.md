@@ -73,6 +73,34 @@ HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
 
 `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` can also be passed positionally, overriding `.env`: `npm run start -- 2 5`.
 
+### Per-portfolio risk overrides
+
+`MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` in `.env` are the default band for every followed portfolio — but you can give any specific one its own band instead, e.g. a trader you trust more (or less) than the rest.
+
+`.copy-portfolio-risk.json` (gitignored, not committed) holds this. It's auto-maintained every poll cycle to always reflect who you actually follow right now — you never create or delete entries yourself:
+
+```json
+[
+  {
+    "portfolioId": "3de730c5-d1b9-4e5d-be79-66375fc02910",
+    "title": "Scalp Company",
+    "ownerUsername": "archiduc",
+    "minMarginPct": null,
+    "maxMarginPct": null
+  }
+]
+```
+
+- Newly followed → a blank entry (`null`/`null`) appears on the very next cycle.
+- Unfollowed → its entry disappears on the very next cycle.
+- `title`/`ownerUsername` are just for your own readability when hand-editing the file — purely cosmetic, kept fresh automatically, never used for any decision.
+- **To set a custom band**, edit `minMarginPct`/`maxMarginPct` for that portfolio directly in the file — same whole-number-percent convention as `.env` (e.g. `5` for 5%), not a fraction. `null` on either field falls back to that field's `.env` value; you can override just one and leave the other `null`.
+- Your edits are never overwritten — the file is only rewritten when the followed set or a title/owner actually changes, not on every cycle.
+- An invalid custom band (min above max, or negative) is rejected **entirely** — falls back to the full `.env` band for that portfolio, logged once as `invalid_portfolio_risk_override`, rather than silently clamping into something arbitrary.
+- Leverage cap (`MAX_LEVERAGE`) is **not** overridable per portfolio — global only.
+
+A successful override is logged once as `portfolio_risk_override_applied` (re-logged only if you actually change the values, not every cycle).
+
 ### Skipping stale, already-profitable entries
 
 Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
@@ -254,6 +282,15 @@ Things worth knowing if you're reading the code or extending it:
 - **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead. The one deliberate exception: a stale, already-profitable entry is skipped outright rather than resized — see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries).
 - **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
 - **Every HL/Invo network call has a 15s timeout.** A hung connection with no timeout blocks the entire reconcile cycle indefinitely with nothing ever thrown — no error log, no crash, just silence until something external (a manual restart) breaks the stall. Bounded so a stall becomes an ordinary caught error instead, retried next cycle.
+
+## Manually opening, editing, or closing positions yourself
+
+You're always free to act directly on Hyperliquid (or via `npm run close`) — this daemon never crashes over it, and won't fight or "correct" a manual action back to what it thinks the position should be:
+
+- **Manually close a position this daemon is tracking**, while the trader's own signal is still open: the next cycle detects there's no real position left for that `baseId`, logs `manual_close_detected`, and permanently stops managing that specific trade — it will **not** silently reopen it. A brand-new trade from the same trader later gets its own fresh `baseId` and is mirrored normally.
+- **Manually resize a tracked position** (partial close, add to it, etc.): the next cycle notices the real size no longer matches what's tracked, logs `resynced_to_live_position`, and recalculates from the real size before deciding on the next order — so it adjusts from where the position actually is, not from a stale internal number.
+- **Manually flip a tracked position's direction** (close a long, open a short on the same coin): treated the same as a manual close — logs `manual_direction_change_detected` and permanently stops managing that `baseId`, rather than guessing what you meant.
+- **Manually open or edit a position on a coin this daemon isn't tracking**: left alone entirely; `logUntrackedPositions()` flags it in the logs as informational, no action taken. The one exception is the existing same-coin conflict-resolution logic (see below) — if the coin happens to also match a followed trader's own signal, normal auto-adopt/conflict rules apply exactly as they would for any other pre-existing position.
 
 ## Disclaimer
 
