@@ -1,4 +1,5 @@
 import { Hyperliquid } from 'hyperliquid';
+import '../services/http-dispatcher.js';
 import type { HyperliquidFill, HyperliquidPosition } from '../types.js';
 
 // Required on every order for Invo compatibility.
@@ -11,6 +12,28 @@ function toSdkCoin(coin: string): string {
 }
 
 const HL_INFO_TIMEOUT_MS = 15_000;
+const HL_EXCHANGE_TIMEOUT_MS = 20_000;
+
+/**
+ * The SDK's own exchange calls (`connect`/`updateLeverage`/`placeOrder`) go
+ * through axios internally — entirely separate from our own fetch/undici
+ * setup, so http-dispatcher.ts's fix does not cover this path at all. This
+ * is a Promise.race, not a true cancel: the underlying axios request keeps
+ * running in the background even after we stop waiting on it. Harmless for
+ * `updateLeverage` (idempotent, no order placed); for `placeOrder` there's
+ * a small residual risk the order actually succeeds server-side after
+ * we've already given up and moved on to logging it as failed — but that
+ * bounded, rare risk is strictly better than an indefinite hang of the
+ * entire daemon, which is what happens with no timeout at all (observed
+ * live: a multi-minute freeze with zero pending requests visible from our
+ * side once axios's own state got stuck).
+ */
+function withRaceTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+	]);
+}
 
 /**
  * Every /info call goes through here specifically so none of them can hang
@@ -20,15 +43,33 @@ const HL_INFO_TIMEOUT_MS = 15_000;
  * just no forward progress until something external (a restart) breaks
  * the stall. A bounded timeout turns that into an ordinary catchable
  * error instead, retried on the very next cycle.
+ *
+ * Uses a manual AbortController rather than the `AbortSignal.timeout()`
+ * shorthand deliberately: undici (Node's fetch implementation) can reuse a
+ * keep-alive socket the remote already closed and hang waiting on it from
+ * deep inside its own connection-pool state machine, a path
+ * `AbortSignal.timeout()` doesn't reliably reach (see http-dispatcher.ts,
+ * imported for its side effect of shortening keep-alive so this scenario
+ * is rare in the first place). The manual pattern at least gives a real,
+ * inspectable timer instead of an opaque one.
  */
 async function postInfo(body: unknown): Promise<any> {
-	const resp = await fetch('https://api.hyperliquid.xyz/info', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(HL_INFO_TIMEOUT_MS),
-	});
-	return resp.json();
+	const controller = new AbortController();
+	const timer = setTimeout(
+		() => controller.abort(new Error(`HL /info timed out after ${HL_INFO_TIMEOUT_MS}ms`)),
+		HL_INFO_TIMEOUT_MS,
+	);
+	try {
+		const resp = await fetch('https://api.hyperliquid.xyz/info', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			signal: controller.signal,
+		});
+		return await resp.json();
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 // HL rejects a perp limit price that violates EITHER of two independent
@@ -87,7 +128,7 @@ export class HyperliquidClient {
 
 	async connect(): Promise<void> {
 		this.sdk = new Hyperliquid({ privateKey: this.agentKey, walletAddress: this.walletAddress, enableWs: false });
-		await this.sdk.connect();
+		await withRaceTimeout(this.sdk.connect(), HL_EXCHANGE_TIMEOUT_MS, 'sdk.connect');
 	}
 
 	private getSdk(): Hyperliquid {
@@ -127,7 +168,11 @@ export class HyperliquidClient {
 	}
 
 	async setLeverage(coin: string, leverage: number): Promise<unknown> {
-		return this.getSdk().exchange.updateLeverage(toSdkCoin(coin), 'isolated', leverage);
+		return withRaceTimeout(
+			this.getSdk().exchange.updateLeverage(toSdkCoin(coin), 'isolated', leverage),
+			HL_EXCHANGE_TIMEOUT_MS,
+			'updateLeverage',
+		);
 	}
 
 	async placeMarketOrder(
@@ -144,16 +189,20 @@ export class HyperliquidClient {
 		const rawPx = isBuy ? mid * (1 + slippagePct) : mid * (1 - slippagePct);
 		const limitPx = roundToValidLimitPx(rawPx, szDecimals);
 
-		return this.getSdk().exchange.placeOrder({
-			coin: toSdkCoin(coin),
-			is_buy: isBuy,
-			sz: parseFloat(size),
-			limit_px: limitPx,
-			order_type: { limit: { tif: 'Ioc' } },
-			reduce_only: false,
-			grouping: 'na',
-			builder: INVO_BUILDER,
-		});
+		return withRaceTimeout(
+			this.getSdk().exchange.placeOrder({
+				coin: toSdkCoin(coin),
+				is_buy: isBuy,
+				sz: parseFloat(size),
+				limit_px: limitPx,
+				order_type: { limit: { tif: 'Ioc' } },
+				reduce_only: false,
+				grouping: 'na',
+				builder: INVO_BUILDER,
+			}),
+			HL_EXCHANGE_TIMEOUT_MS,
+			'placeOrder',
+		);
 	}
 
 	/** Fully flattens whatever position currently exists for this coin. */

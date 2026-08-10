@@ -1,3 +1,4 @@
+import '../services/http-dispatcher.js';
 import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../types.js';
 
 const BASE = 'https://api.invoapp.com';
@@ -6,7 +7,20 @@ const MAX_RATE_LIMIT_RETRIES = 3;
 // indefinitely with nothing ever thrown — silent, no error log, no crash,
 // just no forward progress. Bounded so a stall becomes an ordinary
 // catchable error instead, retried next cycle.
+//
+// Manual AbortController rather than the `AbortSignal.timeout()` shorthand
+// deliberately: undici can reuse a keep-alive socket the remote already
+// closed and hang from deep inside its own connection-pool state machine,
+// a path `AbortSignal.timeout()` doesn't reliably reach (see
+// http-dispatcher.ts, imported above for its side effect of shortening
+// keep-alive so this is rare in the first place).
 const INVO_FETCH_TIMEOUT_MS = 15_000;
+
+function withAbortTimeout(ms: number, label: string): { signal: AbortSignal; clear: () => void } {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(new Error(`${label} timed out after ${ms}ms`)), ms);
+	return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
 
 export interface RecordOpenPayload {
 	clientTxId: string;
@@ -67,6 +81,7 @@ export class InvoClient {
 	}
 
 	private async refreshAccessToken(): Promise<boolean> {
+		const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, 'Invo refresh_token');
 		try {
 			const resp = await fetch(`${BASE}/v1_0/auth/refresh_token`, {
 				method: 'GET',
@@ -75,7 +90,7 @@ export class InvoClient {
 					'x-app-version': '0.0.75',
 					'x-platform': 'web',
 				},
-				signal: AbortSignal.timeout(INVO_FETCH_TIMEOUT_MS),
+				signal,
 			});
 			if (resp.status !== 200) return false;
 			const data = await resp.json();
@@ -86,6 +101,8 @@ export class InvoClient {
 			return false;
 		} catch {
 			return false;
+		} finally {
+			clear();
 		}
 	}
 
@@ -111,17 +128,23 @@ export class InvoClient {
 
 	private async post(path: string, body: unknown, retriedAuth = false, rateLimitAttempt = 0): Promise<any> {
 		await this.ensureToken();
-		const resp = await fetch(`${BASE}${path}`, {
-			method: 'POST',
-			headers: {
-				Authorization: this.accessToken,
-				'Content-Type': 'application/json',
-				'x-app-version': '0.0.75',
-				'x-platform': 'web',
-			},
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(INVO_FETCH_TIMEOUT_MS),
-		});
+		const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, `Invo ${path}`);
+		let resp: Response;
+		try {
+			resp = await fetch(`${BASE}${path}`, {
+				method: 'POST',
+				headers: {
+					Authorization: this.accessToken,
+					'Content-Type': 'application/json',
+					'x-app-version': '0.0.75',
+					'x-platform': 'web',
+				},
+				body: JSON.stringify(body),
+				signal,
+			});
+		} finally {
+			clear();
+		}
 
 		const text = await resp.text();
 		let data: any;

@@ -111,6 +111,112 @@ deploy to confirm `invoResult.success:true` instead of the 404. If it still
 fails, hypothesis #2 (trader's own `investment.baseShortId`) is next in line
 per the research agent's ranked list.
 
+## 2026-08-10 ~02:23–02:43 CEST — second freeze, ~20 minutes, root-caused live and fixed
+
+User reported the daemon froze again (1-2 min by their initial report; turned
+out to be ~20 minutes by the time it was caught), **after** the fetch-timeout
+fix above had already deployed — meaning that fix alone wasn't sufficient.
+Investigated live, on the actual frozen process, rather than guessing:
+
+- Confirmed frozen in real time: journal showed no new log line for 17+
+  minutes while `date` kept advancing.
+- `strace -p <pid>` and per-thread `/proc/<pid>/task/*/syscall` showed the
+  main thread idle in `do_epoll_wait` (normal Node idle state, not
+  informative on its own) and libuv worker threads in `futex_do_wait`
+  (also normal/idle) — no thread stuck in a single blocking syscall.
+- Ran a battery of live diagnostic scripts (same process, same moment)
+  against every read endpoint this codebase calls: all 4 raw HL `/info`
+  calls, `sdk.connect()`, `sdk.exchange.updateLeverage()` (real, harmless
+  no-op call), and all Invo endpoints (`getFollowedPortfolios`,
+  `getOpenInvestments` × 4 portfolios, `getClosedInvestments` × 4,
+  including the since-unfollowed `booobsas` portfolio directly by ID) — **every
+  single one succeeded in under 2 seconds.** Network to both APIs was
+  provably healthy the whole time the daemon was frozen.
+- Sent `SIGUSR1` to the live stuck process to activate Node's built-in
+  inspector (no restart needed), connected via the raw CDP WebSocket
+  protocol (`process.argv`-driven script using Node's native `WebSocket`
+  global), and ran `process._getActiveRequests().length` /
+  `process._getActiveHandles()` **inside the actual stuck process**:
+  `activeRequests: 0`, only 3 idle keep-alive `Socket`/`TLSSocket` handles,
+  no pending `Timeout` handle. This directly disproved "hung waiting on a
+  request" and "hung on a hanging setTimeout backoff" — the process looked
+  completely idle from Node's own accounting, yet made no forward progress
+  for 20 minutes.
+- Spawned a research agent (WebSearch + reading real `nodejs/undici` GitHub
+  issues directly, not just search snippets) specifically on "can
+  AbortSignal.timeout()-guarded fetch() hang forever with 0 active
+  requests visible." Found a well-corroborated, still-open bug class
+  (nodejs/undici#3492, #3905, #4215, #4405, #1926, #2171): undici's
+  connection pool can silently reuse a keep-alive socket a remote
+  peer/load-balancer already closed without a TCP RST/FIN — the socket
+  looks `ESTABLISHED` locally (matches what we saw), a request gets
+  written onto it, and the promise never settles because the hang lives
+  **inside undici's own pool/socket-reuse state machine**, a code path
+  `AbortSignal` (shorthand or manual) does not reliably reach. Undici's own
+  internal `headersTimeout` (default 600s) would eventually recover it —
+  which is consistent with "many minutes," not "instant failure." This
+  spans Node 18 through the current Node 25 (we're on v25.8.1); no evidence
+  it's fixed or that a different Node version avoids it.
+- **This means my own earlier fetch-timeout fix, while directionally
+  correct (bounding calls IS necessary), used the wrong primitive** for
+  this specific failure mode — `AbortSignal.timeout()` doesn't reach a hang
+  inside undici's pool internals.
+
+**Fix** (`bugfix/undici-keepalive-hang-fix`):
+1. Added `undici` as a direct dependency and created
+   `src/services/http-dispatcher.ts`, which registers a custom
+   `undici.Agent` as the global dispatcher with a short `keepAliveTimeout`
+   (2s) and explicit `connectTimeout`/`headersTimeout`/`bodyTimeout` — so
+   idle sockets get recycled by undici itself long before a remote/
+   intermediary can silently kill them out from under us. This is the
+   actual root-cause fix per the research: attack the stale-socket
+   problem directly rather than trying to abort around it.
+2. Replaced `AbortSignal.timeout()` with the manual `AbortController` +
+   `setTimeout` + `clearTimeout` pattern in both `hyperliquid-client.ts`
+   and `invo-client.ts`, per the research recommendation (gives a real,
+   inspectable timer; not a guaranteed fix for THIS bug class on its own,
+   but strictly better practice and cheap to do alongside #1).
+3. Added a **separate** defense-in-depth timeout (`withRaceTimeout`,
+   `Promise.race`-based) around the HL SDK's own `connect`/`updateLeverage`/
+   `placeOrder` calls, which go through axios internally — completely
+   outside undici, so fix #1 does not cover them at all. This is a race,
+   not a true cancel: the underlying axios request keeps running in the
+   background even after we stop waiting on it. Documented the accepted
+   residual risk explicitly: for `placeOrder` specifically, an order could
+   theoretically still succeed server-side after we've timed out and
+   logged it as failed. Judged as a strictly better trade-off than the
+   observed alternative (the entire daemon hanging indefinitely).
+- Verified: typecheck clean; live test script hit `sdk.connect()` +
+  8× `getAllMids()` (exercising keep-alive reuse under the new dispatcher)
+  + `invo.getFollowedPortfolios()` back-to-back, all fast, no hangs.
+- **Not yet proven this eliminates the freeze** — the actual bug lives in
+  undici's internals, which are only mitigated (shorter window for the
+  race condition), not eliminated. If it recurs, the next step per the
+  research agent's recommendation is logging `dispatcher.stats` (undici
+  exposes per-origin connection pool stats) at freeze time to directly
+  confirm "N idle connections queued against origin X" rather than
+  inferring it, and/or trying `pipelining: 0` on the Agent.
+
+**Separately found and fixed while investigating** (`bugfix/close-positions-for-unfollowed-portfolios`):
+the user unfollowed `booobsas` (the account's most active trader, owning 5
+of 6 currently-tracked positions) mid-investigation. Checking whether "the
+app doesn't know this" causes problems surfaced a real, independent bug:
+`Reconciler.run()`'s close-detection loop only ever runs for portfolios
+still in the currently-followed list (nested inside the per-portfolio
+loop). If a portfolio is unfollowed **entirely** — not just one investment
+closing on the trader's side — every `baseId` tracked from it is never
+visited by that loop again, ever: permanently orphaned, and invisible to
+every other check too (`existing_position_conflict` doesn't apply,
+`logUntrackedPositions` doesn't flag it since it's still genuinely
+"tracked" in state). Real, live risk: those 5 positions would have sat
+forever with zero automated management. **Fixed**: after the per-portfolio
+loop, a final pass closes any tracked baseId whose `portfolioId` is set but
+no longer in the currently-followed set (manually-`adopt`ed positions have
+no `portfolioId` at all and are correctly left untouched). Consistent with
+this project's stated design ("mirrors every open/adjust/close from every
+portfolio you follow" — unfollowing means stop mirroring, which means
+close, not abandon-in-place).
+
 ## 2026-08-10 ~01:55 CEST — user's healthcheck monitor reported ~8 minutes of downtime
 
 User got an external healthchecks.io "down" alert (~8 minutes) shortly after
