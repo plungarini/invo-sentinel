@@ -255,6 +255,15 @@ Things worth knowing if you're reading the code or extending it:
 - **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
 - **Every HL/Invo network call has a 15s timeout.** A hung connection with no timeout blocks the entire reconcile cycle indefinitely with nothing ever thrown — no error log, no crash, just silence until something external (a manual restart) breaks the stall. Bounded so a stall becomes an ordinary caught error instead, retried next cycle.
 
+## Manually opening, editing, or closing positions yourself
+
+You're always free to act directly on Hyperliquid (or via `npm run close`) — this daemon never crashes over it, and won't fight or "correct" a manual action back to what it thinks the position should be:
+
+- **Manually close a position this daemon is tracking**, while the trader's own signal is still open: the next cycle detects there's no real position left for that `baseId`, logs `manual_close_detected`, and permanently stops managing that specific trade — it will **not** silently reopen it. A brand-new trade from the same trader later gets its own fresh `baseId` and is mirrored normally.
+- **Manually resize a tracked position** (partial close, add to it, etc.): the next cycle notices the real size no longer matches what's tracked, logs `resynced_to_live_position`, and recalculates from the real size before deciding on the next order — so it adjusts from where the position actually is, not from a stale internal number.
+- **Manually flip a tracked position's direction** (close a long, open a short on the same coin): treated the same as a manual close — logs `manual_direction_change_detected` and permanently stops managing that `baseId`, rather than guessing what you meant.
+- **Manually open or edit a position on a coin this daemon isn't tracking**: left alone entirely; `logUntrackedPositions()` flags it in the logs as informational, no action taken. The one exception is the existing same-coin conflict-resolution logic (see below) — if the coin happens to also match a followed trader's own signal, normal auto-adopt/conflict rules apply exactly as they would for any other pre-existing position.
+
 ## Disclaimer
 
 This relies on reverse-engineered, undocumented Invo and Hyperliquid APIs that can change or break without notice. Copy trading and leverage are inherently risky; past performance of any trader doesn't predict future results. You are solely responsible for your own trading decisions, credential security, and compliance with applicable law. Use at your own risk; provided as-is, no warranty.
