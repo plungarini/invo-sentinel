@@ -111,6 +111,57 @@ deploy to confirm `invoResult.success:true` instead of the 404. If it still
 fails, hypothesis #2 (trader's own `investment.baseShortId`) is next in line
 per the research agent's ranked list.
 
+## 2026-08-10 ~02:51–02:55 CEST — third freeze, ~3 minutes, recurred immediately after the undici fix deployed
+
+Right after redeploying the undici-keepalive fix (see below) and confirming
+it correctly closed the 5 orphaned `booobsas` positions, the daemon went
+silent again for ~3 minutes — no application log line at all, but also,
+critically, **no `error` log either**. That second fact matters: every
+external call in this codebase (HL info, HL exchange/SDK, Invo) is now
+wrapped in a 15-20s bounded timeout; if any of them had fired, `reconciler.run()`'s
+per-investment/per-portfolio try/catch would have logged an `error` line
+well within 3 minutes. Total silence — no success AND no timeout-error —
+means whatever is stuck this time isn't going through any of the paths
+already covered by tonight's timeout fixes.
+
+Checked (without repeating the full live-inspector forensics from the
+previous incident, given diminishing returns and real trading impact of
+staying frozen): confirmed via `SIGUSR1` + a plain syscall/wchan read
+(`/proc/<pid>/task/<pid>/syscall`) that the event loop itself was NOT
+deadlocked (it processed the signal and logged normally) — so this isn't a
+synchronous infinite loop either. `ss -tnpo` showed zero established
+connections for the process at that moment (consistent with the new short
+`keepAliveTimeout` actually working — no stale sockets lying around), which
+also means it wasn't stuck on a dead pooled socket this time.
+
+**Did not fully root-cause this occurrence before restarting** — restored
+service first (3 minutes of downtime is much better than the previous 20,
+but still a real gap), reasoning that repeated multi-minute live forensics
+sessions each time this recurs isn't proportionate while the user is
+asleep and real positions are exposed. Deployed
+`feature/cycle-timing-instrumentation` instead: `Reconciler.run()` now logs
+`cycle_start`, a `cycle_checkpoint` after fetching the portfolio list, a
+`cycle_checkpoint` at the start of each portfolio's processing (with its
+investment count), and `cycle_complete` with total duration — so the
+*next* recurrence is immediately localizable to "stuck before fetching
+portfolios" vs "stuck fetching investments for portfolio X" vs "stuck
+somewhere inside portfolio X's investment loop" straight from the log
+timestamps, without needing to attach a live debugger to catch it in the
+act again. If it recurs, check which checkpoint was the last one logged,
+then look at exactly what runs immediately after it in the code — that
+narrows the live-diagnosis surface area dramatically versus starting from
+scratch each time.
+
+**Open item, not yet resolved**: two more untested possibilities for next
+time this happens — (1) DNS resolution itself hanging (a `getaddrinfo` call
+happens in libuv's thread pool, not the main thread's `epoll_wait`, and
+wouldn't show up in the checks done so far); (2) something in
+`mimic-resolver.ts`'s `resolveMimickedCandidate` path (calls
+`invo.getTradeStatus` → `/dex/trade`) — this IS covered by the same
+`withAbortTimeout` fix as every other Invo call, so should already be
+bounded, but wasn't specifically exercised in isolation the way other
+endpoints were live-tested earlier tonight.
+
 ## 2026-08-10 ~02:23–02:43 CEST — second freeze, ~20 minutes, root-caused live and fixed
 
 User reported the daemon froze again (1-2 min by their initial report; turned
