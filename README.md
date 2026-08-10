@@ -126,7 +126,8 @@ It flags:
 - `missed_close` — a trader closed something we were tracking, and we have no `closed` log event for it at all.
 - `delayed_close` — we did close it, just unusually slowly (>5 min after the trader).
 - `unverified_fill` — we logged an order as filled with a given `oid`, but HL's own fill history in the window has no matching entry.
-- `open_never_filled` (informational) — we logged `opened` but later found no real position to close; almost always means that original order silently never actually filled on the exchange.
+- `open_never_filled` (informational) — we logged `opened` but the order itself never actually filled and later found no real position to close; expected, not a missed close.
+- `position_closed_externally` — the open genuinely filled real money on Hyperliquid, but no `closed` event from this daemon exists anywhere — something else placed a real closing order on this wallet using the same agent key, entirely outside this daemon (e.g. Invo's own official "Mimic" feature, if also separately enabled on the same trader through the app itself, would have signing authority over the same wallet). Includes the actual closing fill looked up from HL's own record (time, direction, `oid`, realized PnL) for context.
 
 Read-only: places no orders, changes no state. Exits non-zero only if it found anything above `info` severity.
 
