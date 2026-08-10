@@ -140,20 +140,56 @@ async function main() {
 			const closeEvent = baseEvents.find((e) => e.type === 'closed');
 			const skipCloseEvent = baseEvents.find((e) => e.type === 'skip_close');
 			if (!closeEvent && skipCloseEvent) {
-				// Explained: we tried to close and found no real HL position —
-				// almost always means the original "opened" never actually
-				// filled (see hlResult on the opened event to confirm). Not a
-				// missed close, but still worth surfacing since it means the
-				// open silently failed at some point.
-				issues.push({
-					type: 'open_never_filled',
-					severity: 'info',
-					baseId: inv.baseId,
-					coin: inv.ticker,
-					trader: inv.owner?.username,
-					detail:
-						'daemon logged "opened" but later found no real HL position to close — the original order likely never actually filled; check that opened event\'s hlResult',
-				});
+				// Two different explanations produce this same signature
+				// (tracked it, later found nothing real to close) — distinguish
+				// them by checking whether the original "opened" event's own
+				// hlResult shows a real fill.
+				const openedEvent = baseEvents.find((e) => e.type === 'opened' || e.type === 'auto_adopted');
+				const openedStatuses = (openedEvent as any)?.hlResult?.response?.data?.statuses;
+				const openedReallyFilled = Array.isArray(openedStatuses) && openedStatuses.some((s: any) => s?.filled);
+
+				if (openedReallyFilled) {
+					// The open genuinely filled real money on HL, but this
+					// daemon has no `closed` event for it anywhere — something
+					// else placed a real closing order on this wallet using
+					// this same agent key, entirely outside this daemon. Look
+					// up the actual closing fill on HL's own record for detail.
+					const openedAtMs = Date.parse((openedEvent as any).ts);
+					const closingFill = fills.find(
+						(f: any) => f.coin === inv.ticker && f.time > openedAtMs && /close/i.test(f.dir),
+					);
+					issues.push({
+						type: 'position_closed_externally',
+						severity: 'warn',
+						baseId: inv.baseId,
+						coin: inv.ticker,
+						trader: inv.owner?.username,
+						detail:
+							"the open genuinely filled on HL, but no close from this daemon exists anywhere in the logs — something else placed a real closing order on this wallet/agent key without this daemon's involvement (e.g. Invo's own official Mimic feature, if also separately enabled on this trader through the app itself)",
+						closingFill: closingFill
+							? {
+									time: new Date(closingFill.time).toISOString(),
+									dir: closingFill.dir,
+									oid: closingFill.oid,
+									closedPnl: closingFill.closedPnl,
+								}
+							: null,
+					});
+				} else {
+					// Explained: we tried to close and found no real HL
+					// position — the original "opened" never actually filled.
+					// Not a missed close, but still worth surfacing since it
+					// means the open silently failed at some point.
+					issues.push({
+						type: 'open_never_filled',
+						severity: 'info',
+						baseId: inv.baseId,
+						coin: inv.ticker,
+						trader: inv.owner?.username,
+						detail:
+							'daemon logged "opened" but the order itself never actually filled (no `filled` status on it), and later found no real HL position to close — expected, not a missed close',
+					});
+				}
 				continue;
 			}
 			if (!closeEvent) {
