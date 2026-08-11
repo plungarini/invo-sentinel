@@ -37,7 +37,7 @@ export class Reconciler {
 	) {}
 
 	async run(): Promise<void> {
-		// Cheap start/end markers with wall-clock duration — the previous two
+		// Cheap start/end markers with wall-clock duration - the previous two
 		// live incidents (see INCIDENT_LOG.md) both required attaching a
 		// debugger to a hung process mid-incident to even confirm WHEN a
 		// stuck cycle started; a timestamped log line at each phase boundary
@@ -145,7 +145,7 @@ export class Reconciler {
 
 			// Same cleanup for ignored baseIds: once that investment is gone
 			// from the trader's own open list, the ignore entry has nothing
-			// left to guard against — any future trade from them gets a fresh
+			// left to guard against - any future trade from them gets a fresh
 			// baseId anyway.
 			let ignoredChanged = false;
 			for (const [baseId, entry] of Object.entries(ignored)) {
@@ -159,20 +159,20 @@ export class Reconciler {
 
 		// The close-detection loop above only ever runs for portfolios still
 		// in `perPortfolio` (i.e. still followed right now). If a whole
-		// portfolio is unfollowed — not just one investment closing on the
-		// trader's side — any baseId tracked from it is never visited by
+		// portfolio is unfollowed - not just one investment closing on the
+		// trader's side - any baseId tracked from it is never visited by
 		// that loop again, ever, so it'd otherwise be silently forgotten
 		// (not even flagged, since `logUntrackedPositions` only flags coins
-		// with NO state entry at all — this one still has one).
+		// with NO state entry at all - this one still has one).
 		//
 		// Deliberately NOT closing it: unfollowing is a decision about
 		// stopping automated management, not an instruction to flatten a
-		// real position — especially not one that might be sitting at a
+		// real position - especially not one that might be sitting at a
 		// loss. Stop tracking it (delete from state, place no order at all)
 		// so it becomes a plain untracked wallet position the user handles
 		// manually; `logUntrackedPositions` will now correctly flag it.
 		// Skip entries with no portfolioId at all (manually `npm run
-		// adopt`ed positions never have one) — those were never tied to a
+		// adopt`ed positions never have one) - those were never tied to a
 		// followed portfolio to begin with.
 		const followedPortfolioIds = new Set(portfolios.map((p) => p.id));
 		let untrackedUnfollowed = false;
@@ -185,7 +185,7 @@ export class Reconciler {
 				trader: entry.ownerUsername,
 				portfolioId: entry.portfolioId,
 				reason:
-					'portfolio no longer followed; stopping tracking WITHOUT closing — real position left exactly as-is on the wallet for manual handling',
+					'portfolio no longer followed; stopping tracking WITHOUT closing - real position left exactly as-is on the wallet for manual handling',
 			});
 			delete state[baseId];
 			untrackedUnfollowed = true;

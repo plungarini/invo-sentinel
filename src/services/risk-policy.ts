@@ -29,12 +29,12 @@ export interface ResolvedPortfolioRisk {
 }
 
 /**
- * Per-portfolio override of the margin band only — leverage cap stays
+ * Per-portfolio override of the margin band only - leverage cap stays
  * global-only, not something a portfolio override touches. `null` on
  * either field falls back to the global value for that field. A resulting
  * band that fails the same validation `loadConfig` applies to the global
- * one (min >= 0, max >= min) is rejected entirely — falls back to the full
- * global band rather than clamping into something arbitrary — so a typo
+ * one (min >= 0, max >= min) is rejected entirely - falls back to the full
+ * global band rather than clamping into something arbitrary - so a typo
  * in the override file can't silently misconfigure risk.
  */
 export function resolvePortfolioRisk(

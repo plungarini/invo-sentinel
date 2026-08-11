@@ -6,7 +6,7 @@ import type { OpenInvestment } from '../types.js';
  * been running for a while and is already meaningfully profitable is a
  * different risk/reward than it was at its real entry. Opening it fresh,
  * at 0% PnL from our side, well after the fact (e.g. right as a same-coin
- * conflict clears) doesn't mirror what the trader actually did — it's a
+ * conflict clears) doesn't mirror what the trader actually did - it's a
  * new bet with old sizing.
  */
 
@@ -26,7 +26,7 @@ export interface StaleEntryVerdict {
 
 /**
  * The trader's own leveraged return %, i.e. what they'd see as their
- * position's PnL% — not the raw underlying price move.
+ * position's PnL% - not the raw underlying price move.
  */
 export function computeInvestmentPnlPercent(
 	investment: Pick<OpenInvestment, 'directionLong' | 'leverage' | 'entryPrice' | 'currentPrice'>,
