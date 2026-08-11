@@ -1,4 +1,5 @@
 import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
+import type { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import type { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
@@ -32,6 +33,7 @@ export class Reconciler {
 		private stateStore: StateStore,
 		private ignoredStore: IgnoredTradesStore,
 		private portfolioRiskStore: PortfolioRiskStore,
+		private followedPortfoliosStore: FollowedPortfoliosStore,
 		private globalRisk: RiskConfig,
 		private log: Logger,
 	) {}
@@ -49,6 +51,7 @@ export class Reconciler {
 		const ignored = this.ignoredStore.load();
 		const portfolios = await this.poller.fetchFollowedPortfolios();
 		this.log({ type: 'cycle_checkpoint', stage: 'portfolios_fetched', count: portfolios.length });
+		this.followedPortfoliosStore.save(portfolios);
 		const riskEntries = this.portfolioRiskStore.sync(portfolios);
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];

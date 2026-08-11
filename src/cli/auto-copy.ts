@@ -6,6 +6,7 @@ import { loadConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger } from '../services/logger.js';
@@ -75,6 +76,7 @@ async function main() {
 	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
 	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), log);
 	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, 'data/.copy-portfolio-risk.json'), log);
+	const followedPortfoliosStore = new FollowedPortfoliosStore(join(ROOT_DIR, 'data/.copy-followed-portfolios.json'), log);
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -84,7 +86,17 @@ async function main() {
 		assetMeta: meta.universe,
 	});
 	const poller = new PortfolioPoller(invo, log);
-	const reconciler = new Reconciler(poller, sync, hl, stateStore, ignoredStore, portfolioRiskStore, config.risk, log);
+	const reconciler = new Reconciler(
+		poller,
+		sync,
+		hl,
+		stateStore,
+		ignoredStore,
+		portfolioRiskStore,
+		followedPortfoliosStore,
+		config.risk,
+		log,
+	);
 
 	log({
 		type: 'started',
