@@ -17,6 +17,10 @@ export class PortfolioPoller {
 		private log: Logger,
 	) {}
 
+	drainSlowInvoCalls() {
+		return this.invo.drainSlowCalls();
+	}
+
 	/** Fetched fresh every call; one cheap request, so a new follow/unfollow shows up on the very next poll, not some slower cadence. */
 	async fetchFollowedPortfolios(): Promise<FollowedPortfolio[]> {
 		const portfolios = await this.invo.getFollowedPortfolios();

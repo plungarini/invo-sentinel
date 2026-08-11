@@ -1,3 +1,4 @@
+import { SlowCallTracker } from '../services/call-timing.js';
 import '../services/http-dispatcher.js';
 import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../types.js';
 
@@ -97,8 +98,13 @@ function mapPortfolio(portfolio: any): FollowedPortfolio {
  */
 export class InvoClient {
 	private accessToken = '';
+	private slowCalls = new SlowCallTracker('invo');
 
 	constructor(private refreshToken: string) {}
+
+	drainSlowCalls() {
+		return this.slowCalls.drain();
+	}
 
 	private getUserId(): string {
 		const raw = (this.accessToken || this.refreshToken).replace('Bearer ', '');
@@ -107,29 +113,31 @@ export class InvoClient {
 	}
 
 	private async refreshAccessToken(): Promise<boolean> {
-		const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, 'Invo refresh_token');
-		try {
-			const resp = await fetch(`${BASE}/v1_0/auth/refresh_token`, {
-				method: 'GET',
-				headers: {
-					Authorization: `Bearer ${this.refreshToken}`,
-					'x-app-version': '0.0.75',
-					'x-platform': 'web',
-				},
-				signal,
-			});
-			if (resp.status !== 200) return false;
-			const data = await resp.json();
-			if (data.accessToken) {
-				this.accessToken = `Bearer ${data.accessToken}`;
-				return true;
+		return this.slowCalls.track('/v1_0/auth/refresh_token', async () => {
+			const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, 'Invo refresh_token');
+			try {
+				const resp = await fetch(`${BASE}/v1_0/auth/refresh_token`, {
+					method: 'GET',
+					headers: {
+						Authorization: `Bearer ${this.refreshToken}`,
+						'x-app-version': '0.0.75',
+						'x-platform': 'web',
+					},
+					signal,
+				});
+				if (resp.status !== 200) return false;
+				const data = await resp.json();
+				if (data.accessToken) {
+					this.accessToken = `Bearer ${data.accessToken}`;
+					return true;
+				}
+				return false;
+			} catch {
+				return false;
+			} finally {
+				clear();
 			}
-			return false;
-		} catch {
-			return false;
-		} finally {
-			clear();
-		}
+		});
 	}
 
 	private async ensureToken(): Promise<void> {
@@ -154,23 +162,24 @@ export class InvoClient {
 
 	private async post(path: string, body: unknown, retriedAuth = false, rateLimitAttempt = 0): Promise<any> {
 		await this.ensureToken();
-		const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, `Invo ${path}`);
-		let resp: Response;
-		try {
-			resp = await fetch(`${BASE}${path}`, {
-				method: 'POST',
-				headers: {
-					Authorization: this.accessToken,
-					'Content-Type': 'application/json',
-					'x-app-version': '0.0.75',
-					'x-platform': 'web',
-				},
-				body: JSON.stringify(body),
-				signal,
-			});
-		} finally {
-			clear();
-		}
+		const resp = await this.slowCalls.track(path, async () => {
+			const { signal, clear } = withAbortTimeout(INVO_FETCH_TIMEOUT_MS, `Invo ${path}`);
+			try {
+				return await fetch(`${BASE}${path}`, {
+					method: 'POST',
+					headers: {
+						Authorization: this.accessToken,
+						'Content-Type': 'application/json',
+						'x-app-version': '0.0.75',
+						'x-platform': 'web',
+					},
+					body: JSON.stringify(body),
+					signal,
+				});
+			} finally {
+				clear();
+			}
+		});
 
 		const text = await resp.text();
 		let data: any;
