@@ -202,7 +202,15 @@ export class InvoClient {
 		if (resp.status === 429 && rateLimitAttempt < MAX_RATE_LIMIT_RETRIES) {
 			const retryAfterHeader = resp.headers.get('retry-after');
 			const delayMs = retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : 1000 * 2 ** rateLimitAttempt;
-			await sleep(Number.isFinite(delayMs) ? delayMs : 1000 * 2 ** rateLimitAttempt);
+			const boundedDelayMs = Number.isFinite(delayMs) ? delayMs : 1000 * 2 ** rateLimitAttempt;
+			// This sleep is the actual cost of a 429, often tens of seconds to
+			// minutes per Invo's own retry-after - confirmed live 2026-08-11,
+			// three ~5min cycles back to back with zero errors logged, because
+			// the individual fetch() calls each returned fast and this sleep
+			// sat entirely outside the timing wrapper below it. Tracking the
+			// sleep itself, not just the fetch, so a rate-limit storm shows up
+			// as a slow_api_call instead of just an unexplained slow cycle.
+			await this.slowCalls.track(`${path} (429 retry ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})`, () => sleep(boundedDelayMs));
 			return this.post(path, body, retriedAuth, rateLimitAttempt + 1);
 		}
 
