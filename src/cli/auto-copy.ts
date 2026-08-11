@@ -10,6 +10,7 @@ import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.j
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger } from '../services/logger.js';
+import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { StateStore } from '../services/state-store.js';
 
@@ -114,15 +115,23 @@ async function main() {
 	});
 
 	pingStart(config.healthcheckPingUrl, log);
-	await reconciler.run();
+	let { followedPortfolioCount } = await reconciler.run();
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 
 	while (true) {
-		await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+		// Scales the gap between cycles up once enough portfolios are followed
+		// that the configured pollIntervalMs alone would exceed Invo's own
+		// Cloudflare rate limit (500 req/300s per IP, confirmed live
+		// 2026-08-11) - see poll-schedule.ts. A no-op at typical follow counts.
+		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs);
+		if (delayMs > config.pollIntervalMs) {
+			log({ type: 'poll_interval_throttled', followedPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
+		}
+		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {
-			await reconciler.run();
+			({ followedPortfolioCount } = await reconciler.run());
 			pingSuccess(config.healthcheckPingUrl, log);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });

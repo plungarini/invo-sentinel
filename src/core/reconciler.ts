@@ -38,7 +38,7 @@ export class Reconciler {
 		private log: Logger,
 	) {}
 
-	async run(): Promise<void> {
+	async run(): Promise<{ followedPortfolioCount: number }> {
 		// Cheap start/end markers with wall-clock duration - the previous two
 		// live incidents (see INCIDENT_LOG.md) both required attaching a
 		// debugger to a hung process mid-incident to even confirm WHEN a
@@ -211,6 +211,7 @@ export class Reconciler {
 		}
 
 		this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt });
+		return { followedPortfolioCount: portfolios.length };
 	}
 
 	/**
