@@ -1,19 +1,31 @@
 # invo-sentinel
 
-Automatic copy trading for [Invo](https://app.invoapp.com) followed portfolios, executed on [Hyperliquid](https://hyperliquid.xyz). A plain polling daemon mirrors every open, margin adjustment, and close from every trader you already follow, with one guardrail: your margin per trade is always clamped into a `[min%, max%]` band of your own equity, and leverage is capped. **Trades are never skipped for being "too risky", only resized** — the one deliberate exception is a trade that's already stale and profitable by the time it's seen (see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries)). It watches every followed portfolio and stands in for you, on your own risk terms.
+Automatic copy trading for [Invo](https://app.invoapp.com) followed portfolios, executed on [Hyperliquid](https://hyperliquid.xyz). A plain polling daemon mirrors every open, margin adjustment, and close from every trader you follow, with one guardrail: your margin per trade is always clamped into a `[min%, max%]` band of your own equity, and leverage is capped. **Trades are never skipped for being "too risky," only resized**, with one deliberate exception: a trade that's already stale and profitable by the time it's seen (see [Skipping stale entries](#skipping-stale-already-profitable-entries)).
 
-## Relationship to the original project
+Forked from [`AKCodez/invo-copy-trader`](https://github.com/AKCodez/invo-copy-trader) - kept the reverse-engineered API/signing knowledge, replaced the AI decision loop with deterministic logic.
 
-This started from [`AKCodez/invo-copy-trader`](https://github.com/AKCodez/invo-copy-trader), which reverse-engineered the same Invo + Hyperliquid API surface but designed around a Claude Code agent making the discovery/follow/copy decisions interactively. `invo-sentinel` keeps the reverse-engineered API knowledge and the Hyperliquid execution primitives (order placement, signing quirks), but replaces the AI decision loop entirely with deterministic, mechanical logic. See [Design notes](#design-notes) for what changed and why.
+## Contents
 
-## What it actually does
+- [What it does](#what-it-does)
+- [Quick start](#quick-start)
+- [Credentials](#credentials)
+- [Risk configuration](#risk-configuration)
+- [Commands](#commands)
+- [Dashboard UI](#dashboard-ui)
+- [Auditing (`npm run reconcile`)](#auditing-npm-run-reconcile)
+- [Running continuously](#running-continuously)
+- [Same-coin conflicts between traders](#same-coin-conflicts-between-traders)
+- [Manual intervention](#manual-intervention)
+- [Disclaimer](#disclaimer)
+
+## What it does
 
 Every poll cycle (default 5s):
 
-1. Fetches the list of portfolios you follow (`get_users_followed_portfolios`); refreshed every cycle, so following someone new shows up on the very next poll.
-2. For each one, fetches their **currently open** investments (`get_investments`, `isOpen: true`); this is the full picture every time, not an event stream, so it doubles as backfill: the very first cycle after startup already reflects everything currently open, not just things that open after the daemon starts.
-3. For each open trade: computes your target margin from the trader's own margin %, clamped into your configured band, and places whatever delta order (open / increase / reduce) is needed to get there. Leverage is capped the same way.
-4. For anything you're tracking that's no longer in that trader's open list: closes it fully on Hyperliquid, unclamped.
+1. Fetches the portfolios you follow, refreshed every cycle.
+2. For each one, fetches their **currently open** investments - a full snapshot, not an event stream, so restarting the daemon doesn't miss anything.
+3. For each open trade: computes your target margin from the trader's own margin %, clamped into your configured band, and places whatever delta order gets you there. Leverage is capped the same way.
+4. Anything you're tracking that's no longer in a trader's open list gets closed fully, unclamped.
 5. Cross-checks your real Hyperliquid positions against what's tracked, and flags anything untracked instead of silently ignoring it.
 
 ## Quick start
@@ -21,13 +33,13 @@ Every poll cycle (default 5s):
 ```bash
 npm install
 cp .env.example .env
-# fill in .env; see Credentials below
-npm run preflight        # 10-ish sanity checks: env, HL connection, Invo auth, balance
-npm run dry-run           # watch it decide without placing any real orders
-./scripts/run.sh          # go live, with auto-restart on crash
+# fill in .env - see Credentials below
+npm run preflight   # sanity checks: env, HL connection, Invo auth, balance
+npm run dry-run      # watch it decide without placing real orders
+./scripts/run.sh     # go live, with auto-restart on crash - also starts the dashboard UI alongside it
 ```
 
-Run it somewhere that stays on; a closed laptop lid or terminal kills a foreground process. See [Running continuously](#running-continuously-survive-reboots-and-crashes) below for a real process supervisor setup — a terminal window or `tmux` session is fine for testing, but isn't enough on its own for something meant to run unattended.
+Run it somewhere that stays on - a closed laptop lid or terminal kills a foreground process. See [Running continuously](#running-continuously) for a real process supervisor.
 
 ## Credentials
 
@@ -63,137 +75,87 @@ console.log(new TextDecoder().decode(decrypted)); // 3 dot-separated parts; that
 MIN_MARGIN_PCT=2      # never risk less than this % of your equity per trade
 MAX_MARGIN_PCT=5      # never risk more than this %, no matter what the trader did
 MAX_LEVERAGE=30        # leverage is capped here, not rejected; blank = no cap
-STALE_ENTRY_MAX_AGE_MINUTES=1  # see "Skipping stale, already-profitable entries" below
+STALE_ENTRY_MAX_AGE_MINUTES=1  # see below
 STALE_ENTRY_MAX_PROFIT_PCT=1
 POLL_INTERVAL_MS=5000
 LOG_RETENTION_HOURS=24
 LOG_MAX_TOTAL_MB=200
-HEALTHCHECK_PING_URL=  # optional — see "External monitoring" below
+HEALTHCHECK_PING_URL=  # optional dead-man's-switch ping (e.g. healthchecks.io)
 ```
 
 `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` can also be passed positionally, overriding `.env`: `npm run start -- 2 5`.
 
-### Per-portfolio risk overrides
-
-`MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` in `.env` are the default band for every followed portfolio — but you can give any specific one its own band instead, e.g. a trader you trust more (or less) than the rest.
-
-`.copy-portfolio-risk.json` (gitignored, not committed) holds this. It's auto-maintained every poll cycle to always reflect who you actually follow right now — you never create or delete entries yourself:
-
-```json
-[
-  {
-    "portfolioId": "3de730c5-d1b9-4e5d-be79-66375fc02910",
-    "title": "Scalp Company",
-    "ownerUsername": "archiduc",
-    "minMarginPct": null,
-    "maxMarginPct": null
-  }
-]
-```
-
-- Newly followed → a blank entry (`null`/`null`) appears on the very next cycle.
-- Unfollowed → its entry disappears on the very next cycle.
-- `title`/`ownerUsername` are just for your own readability when hand-editing the file — purely cosmetic, kept fresh automatically, never used for any decision.
-- **To set a custom band**, edit `minMarginPct`/`maxMarginPct` for that portfolio directly in the file — same whole-number-percent convention as `.env` (e.g. `5` for 5%), not a fraction. `null` on either field falls back to that field's `.env` value; you can override just one and leave the other `null`.
-- Your edits are never overwritten — the file is only rewritten when the followed set or a title/owner actually changes, not on every cycle.
-- An invalid custom band (min above max, or negative) is rejected **entirely** — falls back to the full `.env` band for that portfolio, logged once as `invalid_portfolio_risk_override`, rather than silently clamping into something arbitrary.
-- Leverage cap (`MAX_LEVERAGE`) is **not** overridable per portfolio — global only.
-
-A successful override is logged once as `portfolio_risk_override_applied` (re-logged only if you actually change the values, not every cycle).
+You can also give any specific followed portfolio its own margin band, overriding the global one - edit `data/.copy-portfolio-risk.json` (auto-created and kept in sync with who you follow; your own edits are never overwritten).
 
 ### Skipping stale, already-profitable entries
 
-Margin and leverage are only ever resized, never a reason to reject a trade — with one deliberate exception, gated on freshness first, PnL second:
-
-- **Older than `STALE_ENTRY_MAX_AGE_MINUTES`** → permanently skipped, no matter its current PnL. This is the primary gate: a trade idea past its freshness window doesn't get a second look based on how it happens to be doing at the exact moment this daemon considers it.
-- **Still within that window, but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`%** (its own leveraged PnL%, not raw price move) → skipped for _this cycle only_, not permanently. A trade that pumped immediately at entry can still cool back off before the window expires; it's re-checked fresh next cycle. Once the window does expire, the permanent rule above takes over regardless of PnL.
-
-This matters most right after a same-coin conflict clears: say trader A and trader B both hold BTC, so only A's investment gets tracked (see [Resolving pre-existing positions](#resolving-pre-existing-positions-when-traders-overlap) below) while B's sits flagged as a conflict, untouched, however long it's actually been open. The moment A closes, the coin frees up — but B's trade idea is exactly as old as it ever was. Opening it fresh at that point, at 0% PnL and full size, isn't mirroring what B actually did; it's a new bet wearing B's sizing, so it's blocked purely on age, whatever B's PnL happens to be right then. The same rule also catches the case without any conflict involved — any investment that's simply already old by the time this daemon first sees it, e.g. on startup.
-
-A permanent skip is recorded in `.copy-ignored.json`, separate from `.copy-state.json` (only real tracked positions live there), and logged once as `stale_entry_ignored`. A temporary, still-fresh skip is logged as `fresh_entry_profit_skip` and doesn't touch `.copy-ignored.json` at all. The moment a permanently-ignored baseId actually closes on the trader's side, its ignore entry is cleared too — a future trade from the same trader gets its own new baseId regardless.
+The one exception to "never skip, only resize": an entry older than `STALE_ENTRY_MAX_AGE_MINUTES` is **permanently** skipped regardless of its current PnL - this matters most right after a same-coin conflict clears (see [below](#same-coin-conflicts-between-traders)), where opening a long-stale idea fresh at 0% PnL isn't really mirroring it. An entry still within that window but already up more than `STALE_ENTRY_MAX_PROFIT_PCT`% is skipped for just that cycle, re-checked fresh next time.
 
 ### Hyperliquid's minimum order size
 
-Hyperliquid rejects any order below $10 notional outright, independent of anything this project configures. On a small account with a tight `MIN_MARGIN_PCT`/`MAX_MARGIN_PCT` band and a low-leverage coin, the clamped target margin can easily compute to a notional under that floor — a real trade that would otherwise just never open, cycle after cycle, until it's eventually skipped by the stale-entry rule above for having gone unfilled too long.
-
-Consistent with "resize, don't skip": a **brand-new open** whose computed order would land under $10 is bumped up to just over $10 notional (a small buffer, since rounding the order size to the coin's tick precision can otherwise undershoot back below the floor and get rejected right back) instead of being attempted at the smaller size. An **incremental top-up** (or a small reduce) on an already-tracked position that lands under $10 genuinely cannot be placed at all — Hyperliquid would reject it identically every cycle — so it's left completely untouched and retried next cycle once `targetMarginUsd` has drifted further, rather than repeatedly hammering the exchange with an order guaranteed to fail.
-
-Any order Hyperliquid still rejects for another reason is logged as `order_rejected` and left completely untouched — no state or Invo record is written for it — so the exact same delta is retried again next cycle instead of silently corrupting local tracking.
-
-### External monitoring (optional)
-
-Set `HEALTHCHECK_PING_URL` to a ping URL from a "dead man's switch" style monitor (e.g. [healthchecks.io](https://healthchecks.io)) and the daemon will ping it every cycle with no effect on trading if the monitor itself is slow or unreachable — every ping is fire-and-forget, never awaited by the trading logic:
-
-- `<url>/start` at the beginning of each poll cycle.
-- `<url>` (plain, success) at the end of a cycle that completed without error — paired with the `/start` ping, this is what lets the monitor show per-cycle run time, not just up/down.
-- `<url>/fail` at the end of a cycle that threw, and also (best-effort, briefly awaited so it has a real chance to leave before the process exits) right before the process exits on an uncaught exception — an immediate failure signal instead of waiting for a missed-ping timeout to notice the daemon is down.
-
-Leave it unset and none of this runs at all.
+Hyperliquid rejects any order under $10 notional. A brand-new open that computes under that floor is bumped up to just over $10 instead of skipped. An incremental top-up that lands under $10 is left untouched and retried next cycle once the target has drifted further - it can't be placed at any size correction right now.
 
 ## Commands
 
 | Command                                                                 | What it does                                                                  |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `npm run preflight`                                                     | Env, Hyperliquid connection, Invo auth, balance/positions; run this first     |
-| `npm run dry-run`                                                       | Full pipeline, no real orders; everything is logged as `dry_run_*`            |
-| `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                           |
-| `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict (see below)            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `npm run preflight`                                                     | Env, Hyperliquid connection, Invo auth, balance/positions - run this first     |
+| `npm run dry-run`                                                       | Full pipeline, no real orders; everything logged as `dry_run_*`              |
+| `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                          |
+| `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict                       |
 | `npm run close -- <coin>`                                               | Emergency manual close; stopping the daemon does **not** close open positions |
 | `npm run reconcile -- --hours=6`                                        | Read-only audit; see below                                                    |
 
-## Auditing what actually happened (`npm run reconcile`)
+## Dashboard UI
 
-The live daemon's own logs are a record of what it _decided_ to do, not independent proof that it was right. `npm run reconcile -- --hours=6` (window defaults to 6) cross-checks recent behavior against two sources this daemon never otherwise consults:
-
-- **Invo's own closed-investment history** (`isOpen: false` — the live reconciler only ever looks at `isOpen: true`) — the trader's actual full/partial-close record, independent of anything we logged.
-- **Hyperliquid's own `userFills`** — the exchange's ground-truth fill history, matched back to our logs by order id (`oid`), independent of anything Invo or our own state claims happened.
-
-It flags:
-
-- `unexplained_untracked_open` — a trader's open position we're neither tracking, ignoring, nor have a conflict log explaining.
-- `missed_close` — a trader closed something we were tracking, and we have no `closed` log event for it at all.
-- `delayed_close` — we did close it, just unusually slowly (>5 min after the trader).
-- `unverified_fill` — we logged an order as filled with a given `oid`, but HL's own fill history in the window has no matching entry.
-- `open_never_filled` (informational) — we logged `opened` but the order itself never actually filled and later found no real position to close; expected, not a missed close.
-- `position_closed_externally` — the open genuinely filled real money on Hyperliquid, but no `closed` event from this daemon exists anywhere — something else placed a real closing order on this wallet using the same agent key, entirely outside this daemon (e.g. Invo's own official "Mimic" feature, if also separately enabled on the same trader through the app itself, would have signing authority over the same wallet). Includes the actual closing fill looked up from HL's own record (time, direction, `oid`, realized PnL) for context.
-
-Read-only: places no orders, changes no state. Exits non-zero only if it found anything above `info` severity.
-
-## Running continuously (survive reboots and crashes)
-
-`scripts/run.sh` restarts the daemon if the process itself exits, but that's only half the problem: nothing brings it back after the machine reboots, and nothing starts it in the first place if you're not logged in (e.g. a headless box, or a Raspberry Pi that lost power and came back up). For that you want the OS's own service manager. On Linux, that's **systemd**, and it's already installed on essentially every mainstream distribution (Raspberry Pi OS, Ubuntu, Debian, Fedora, Arch, ...) — no extra software to install.
-
-This uses a **user service**, not a system-wide one: no `sudo` required, and it keeps a process that holds real trading credentials entirely inside your own user account rather than running as root.
-
-### 1. One-time: allow user services to start without a login session
-
-By default, a user's systemd services stop when their last session logs out, and don't start until they log back in — not what you want on a box that reboots unattended. Enable "lingering" once, for your own user:
+A local-only, read-only Next.js dashboard lives in `ui/`. It views daemon state and Invo/Hyperliquid data, places no orders, and never touches `data/.copy-state.json` or any other daemon file.
 
 ```bash
-loginctl enable-linger "$USER"
+cd ui && npm install    # one-time
+npm run ui:dev           # dev server, from repo root
+npm run ui:build          # production build
+npm run ui:start           # serve the production build
 ```
 
-Check it took effect: `loginctl show-user "$USER"` should include `Linger=yes`.
+Port defaults to 4400; copy `ui/.env.local.example` to `ui/.env.local` to change it. It's a fully separate process from the daemon - safe to run both concurrently.
 
-### 2. Find the absolute paths you'll need
+**Overview** - total balance, open positions, all-time PnL/win rate, daemon health, refresh-token and agent-key expiry, recent activity.
 
-The service file can't rely on your shell's `PATH`, login scripts, or `~` expansion — everything must be an absolute path. Find yours:
+![Overview](docs/screenshots/overview.png)
+
+**Analytics** - cumulative PnL over time, win rate, trade stats, and breakdowns by portfolio and by coin, all net of fees.
+
+![Analytics](docs/screenshots/analytics.png)
+
+**Wallet** - live open positions with full detail (entry/mark price, margin, notional, funding, liquidation distance), paginated trade history with a per-trade lifecycle timeline, and deposit/withdrawal history.
+
+![Wallet](docs/screenshots/wallet.png)
+
+**Tools → Portfolio Analysis** - look up any Invo portfolio by ID, followed or not, and see its real stats straight from Invo's own API.
+
+![Tools](docs/screenshots/tools.png)
+
+The right rail lists your followed portfolios; clicking one opens the same detail view as the Tools page.
+
+## Auditing (`npm run reconcile`)
+
+The live daemon's own logs record what it _decided_, not proof it was right. `npm run reconcile -- --hours=6` cross-checks recent behavior against Invo's closed-investment history and Hyperliquid's own fill history - two sources the live daemon never consults - and flags anything that doesn't add up: an untracked open with no explanation, a close it missed or was slow on, a fill it can't verify, or a position that closed with no daemon record of it at all (e.g. something else with signing authority over the same wallet closed it). Read-only, places no orders.
+
+## Running continuously
+
+`scripts/run.sh` restarts the daemon if the process exits, but nothing brings it back after a reboot on its own - for that, use your OS's service manager.
+
+**Linux (systemd, user service, no `sudo`):**
 
 ```bash
-readlink -f .            # absolute path to this repo — call it <repo-path>
-which npx                # absolute path to npx — call it <npx-path>
-dirname "$(which npx)"   # the directory to put on PATH below — call it <npx-dir>
+loginctl enable-linger "$USER"   # one-time: let user services start without a login session
 ```
 
-If you installed Node via `nvm`, `<npx-path>`/`<npx-dir>` will be somewhere under `~/.nvm/versions/node/<version>/bin` — that's expected and fine, just use the real resolved path, not one with `~` or `$HOME` in it.
-
-### 3. Create the service file
-
-Create `~/.config/systemd/user/invo-sentinel.service` (substitute your own `<repo-path>` and `<npx-dir>` from step 2):
+Create `~/.config/systemd/user/invo-sentinel.service` (use absolute paths from `readlink -f .` and `which npx`):
 
 ```ini
 [Unit]
-Description=Invo Sentinel - automatic Invo->Hyperliquid copy trading daemon
+Description=Invo Sentinel
 After=network-online.target
 Wants=network-online.target
 
@@ -211,91 +173,38 @@ StandardError=journal
 WantedBy=default.target
 ```
 
-`WorkingDirectory` is what makes `.env` and `.copy-state.json` resolve correctly (both are loaded/saved relative to the repo root) — this is the one setting most worth double-checking if something doesn't come up right.
-
-To pass a risk-band override instead of relying on `.env`, add it to `ExecStart`: `ExecStart=<npx-dir>/npx tsx src/cli/auto-copy.ts 2 5`.
-
-### 4. Enable and start it
-
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable invo-sentinel.service   # survives reboots from here on
-systemctl --user start invo-sentinel.service
+systemctl --user enable --now invo-sentinel.service
+systemctl --user status invo-sentinel.service   # should say "active (running)"
 ```
 
-### 5. Verify it's actually running, and that a crash really recovers
+**Not on Linux, or don't want systemd:** [pm2](https://pm2.keymetrics.io/) (`pm2 start "npx tsx src/cli/auto-copy.ts" --name invo-sentinel`, then `pm2 save && pm2 startup`), Docker (`--restart=always`), or macOS **launchd**.
 
-```bash
-systemctl --user status invo-sentinel.service          # should say "active (running)"
-journalctl --user-unit invo-sentinel -f                 # live tail (logs/*.log also still gets written)
-```
+## Same-coin conflicts between traders
 
-Prove the crash-recovery actually works rather than assuming it — this sends an unrecoverable signal, harder to survive than any error the app could catch on its own:
+Hyperliquid nets positions by coin, not by trader. If a real position could belong to more than one followed trader:
 
-```bash
-kill -9 "$(systemctl --user show -p MainPID --value invo-sentinel.service)"
-sleep 5
-systemctl --user status invo-sentinel.service   # should already be "active (running)" again, new PID
-```
+1. Wrong direction vs. that trader → ruled out immediately.
+2. Right direction, no other follower shares it → auto-adopted, unambiguous.
+3. Shared with another follower → resolved via Invo's own mimic-tracking (ground truth for what you actually clicked "Mimic" on).
+4. Still inconclusive → flagged as `existing_position_conflict`, left untouched until `npm run adopt` or a manual close.
 
-### Common commands
+**Known limitation**: only one trader's investment is tracked per coin at a time - a second trader opening the same coin from a different signal is flagged as a conflict rather than aggregated.
 
-| Command                                                    | What it does                                                                                |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `systemctl --user restart invo-sentinel.service`           | Pick up a code or `.env` change                                                             |
-| `systemctl --user stop invo-sentinel.service`              | Stop it (does **not** close open positions — see `npm run close`)                           |
-| `systemctl --user disable invo-sentinel.service`           | Turn off auto-start on boot, without touching whether it's currently running                |
-| `systemctl --user show -p NRestarts invo-sentinel.service` | How many times it's had to restart — rising unexpectedly is worth investigating in the logs |
+## Manual intervention
 
-### Not on Linux, or don't want systemd
+You're always free to act directly on Hyperliquid. The daemon detects it and adapts rather than fighting you:
 
-The same idea (start on boot, restart on crash, no login required) is available elsewhere:
-
-- **pm2** (cross-platform Node process manager): `pm2 start "npx tsx src/cli/auto-copy.ts" --name invo-sentinel`, then `pm2 save` and `pm2 startup` (the latter prints an OS-specific command to run once, which wires pm2 itself into your OS's startup system).
-- **Docker**: run the repo in a container with `restart: always` (Compose) or `--restart=always` (plain `docker run`) — Docker's own daemon then handles both crash-restart and start-on-boot.
-- **launchd** (macOS): the native equivalent of systemd; same shape as above (a plist with `KeepAlive` and `RunAtLoad`, installed under `~/Library/LaunchAgents/`).
-
-## Resolving pre-existing positions when traders overlap
-
-Hyperliquid nets positions **by coin**, not by trader, so if you already have a real position that predates the daemon, it has to figure out which followed trader's investment it belongs to before it can adopt it:
-
-1. **Wrong direction** (e.g. your real position is long, a candidate is short) → that candidate is immediately ruled out, no API call needed.
-2. **Right direction, and no other followed trader shares both this coin and this direction** → unambiguous, auto-adopted instantly, no order placed.
-3. **Right direction, and another followed trader shares it too** (e.g. two traders both long the same coin) → asks Invo's own mimic-tracking (`/dex/trade`'s `isMimicked` / `unmimickedCount` fields, keyed by the trader's `baseShortId`) which one you actually mimicked through the app; this is ground truth, not a guess, since it's Invo's own record of what you clicked "Mimic" on. See `src/core/mimic-resolver.ts`.
-4. Only if step 3 comes back inconclusive (no update history yet to carry the signal, or; vanishingly rarely; more than one candidate confirms) does it give up and log `existing_position_conflict`, leaving that position untouched until you run `npm run adopt` or close it manually.
-
-In practice, step 3 is rare; most same-coin overlaps resolve at step 1 or 2 once direction is actually factored in.
-
-**Known limitation**: only one trader's investment can be _tracked_ per coin at a time, even after the above resolves which one that is. If a second followed trader later opens a position in a coin you're already tracking (from a different trader), it's flagged as `existing_position_conflict` rather than tracked alongside the first; per-baseId delta sizing assumes a tracked baseId owns the _entire_ real position on that coin, which breaks the moment two do. Supporting true multi-trader aggregation on one coin (summing each trader's share of the net position) would need state keyed by `(coin, direction)` rather than by baseId; a bigger change, not implemented here.
-
-## Logs
-
-`logs/auto-copy-YYYY-MM-DD.log`, one JSON line per event, mirrored to stdout. Retention is enforced two ways at once: files older than `LOG_RETENTION_HOURS` are deleted, and the whole directory is capped at `LOG_MAX_TOTAL_MB` (oldest evicted first); so a burst of activity can't fill the disk even inside the retention window.
-
-## Design notes
-
-Things worth knowing if you're reading the code or extending it:
-
-- **Not the social feed.** `posts/get_feed` (what the original repo's `monitor.ts` used) has a real, confirmed server-side pagination bug, plus an inherent 1-10s propagation delay. This project uses `get_investments(isOpen: true)` per followed portfolio instead; a direct current-state snapshot, no history-walking, no pagination limit. `posts/get_feed` isn't called anywhere in this codebase.
-- **`entrySize` is a percent, not a fraction.** A trader's `entrySize: 0.2` means their margin is 0.20% of _their_ balance; confirmed against the Invo app UI, not documented anywhere. This project reapplies that same percent against _your_ equity, clamped to your configured band.
-- **No exchange-side TP/SL.** This account's phantom-agent key signing has two independently confirmed breakages tied to specific Hyperliquid order fields; `reduce_only: true`, and `grouping: 'normalTpsl'` (both silently produce wrong signature recovery). A stop/trigger order is a third, never-tested field combination on that same fragile signer. Exits mirror the trader's own close instead.
-- **Leverage/margin are capped, never a reason to skip.** The philosophy throughout: never refuse a trade for being "too risky"; resize it into the configured band instead. The one deliberate exception: a stale, already-profitable entry is skipped outright rather than resized — see [Skipping stale, already-profitable entries](#skipping-stale-already-profitable-entries).
-- **Rate limits**: Invo POSTs back off on `429` (honoring `Retry-After` if present, otherwise exponential: 1s/2s/4s) before giving up and surfacing the error to that cycle's logs; the next poll cycle tries again regardless.
-- **Every HL/Invo network call has a 15s timeout.** A hung connection with no timeout blocks the entire reconcile cycle indefinitely with nothing ever thrown — no error log, no crash, just silence until something external (a manual restart) breaks the stall. Bounded so a stall becomes an ordinary caught error instead, retried next cycle.
-
-## Manually opening, editing, or closing positions yourself
-
-You're always free to act directly on Hyperliquid (or via `npm run close`) — this daemon never crashes over it, and won't fight or "correct" a manual action back to what it thinks the position should be:
-
-- **Manually close a position this daemon is tracking**, while the trader's own signal is still open: the next cycle detects there's no real position left for that `baseId`, logs `manual_close_detected`, and permanently stops managing that specific trade — it will **not** silently reopen it. A brand-new trade from the same trader later gets its own fresh `baseId` and is mirrored normally.
-- **Manually resize a tracked position** (partial close, add to it, etc.): the next cycle notices the real size no longer matches what's tracked, logs `resynced_to_live_position`, and recalculates from the real size before deciding on the next order — so it adjusts from where the position actually is, not from a stale internal number.
-- **Manually flip a tracked position's direction** (close a long, open a short on the same coin): treated the same as a manual close — logs `manual_direction_change_detected` and permanently stops managing that `baseId`, rather than guessing what you meant.
-- **Manually open or edit a position on a coin this daemon isn't tracking**: left alone entirely; `logUntrackedPositions()` flags it in the logs as informational, no action taken. The one exception is the existing same-coin conflict-resolution logic (see below) — if the coin happens to also match a followed trader's own signal, normal auto-adopt/conflict rules apply exactly as they would for any other pre-existing position.
+- **Manual close** of a tracked position → detected next cycle, permanently stops managing that trade (a later trade from the same trader gets a fresh id and is mirrored normally).
+- **Manual resize** → recalculates from the real size before its next order.
+- **Manual direction flip** → treated like a manual close.
+- **Manual open/edit on an untracked coin** → left alone, just flagged as informational.
 
 ## Disclaimer
 
 This relies on reverse-engineered, undocumented Invo and Hyperliquid APIs that can change or break without notice. Copy trading and leverage are inherently risky; past performance of any trader doesn't predict future results. You are solely responsible for your own trading decisions, credential security, and compliance with applicable law. Use at your own risk; provided as-is, no warranty.
 
-## License
+The dashboard UI displays data reverse-engineered from Invo's app for personal use only. Not endorsed by, affiliated with, or sponsored by Invo.
 
-MIT.
+MIT licensed.
