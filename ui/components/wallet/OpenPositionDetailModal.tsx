@@ -93,11 +93,14 @@ export default function OpenPositionDetailModal({
 	const takeProfitPnlUsd = estimatePnlAt(priceTarget);
 	const stopLossPnlUsd = estimatePnlAt(stopLoss);
 
-	// What fraction of the price move from entry to liquidation has already happened -
-	// the same basis Invo's own slider uses, not a raw "how close is mark to liq" percent.
+	// Distance from entry to liq is fixed; risk is how much of that range is still left
+	// between mark and liq, not how far mark has drifted from entry - a favorable move
+	// increases mark's distance from liq beyond the original range, correctly clamping to 0%
+	// instead of (wrongly) still counting the move as "progress" via an absolute-value diff from entry.
 	const liqRange = entryPx && liqPx != null ? Math.abs(entryPx - liqPx) : null;
-	const liqTraveled = markPx != null && Number.isFinite(entryPx) ? Math.abs(entryPx - markPx) : null;
-	const liqFilledPct = liqRange && liqRange > 0 && liqTraveled != null ? Math.max(0, Math.min(100, (liqTraveled / liqRange) * 100)) : null;
+	const liqDistance = markPx != null && liqPx != null ? Math.abs(markPx - liqPx) : null;
+	const liqFilledPct =
+		liqRange && liqRange > 0 && liqDistance != null ? Math.max(0, Math.min(100, (1 - liqDistance / liqRange) * 100)) : null;
 
 	return (
 		<Modal onClose={onClose} title="Position Details">

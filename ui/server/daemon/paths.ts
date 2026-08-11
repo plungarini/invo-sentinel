@@ -12,6 +12,7 @@ dotenv.config({ path: join(REPO_ROOT, '.env') });
 export const STATE_PATH = join(REPO_ROOT, 'data/.copy-state.json');
 export const IGNORED_PATH = join(REPO_ROOT, 'data/.copy-ignored.json');
 export const PORTFOLIO_RISK_PATH = join(REPO_ROOT, 'data/.copy-portfolio-risk.json');
+export const FOLLOWED_PORTFOLIOS_PATH = join(REPO_ROOT, 'data/.copy-followed-portfolios.json');
 export const LOGS_DIR = join(REPO_ROOT, 'logs');
 
 let cachedConfig: AppConfig | null = null;
