@@ -10,10 +10,15 @@
 // the daemon self-throttles instead of perpetually retrying into the same wall.
 const INVO_RATE_LIMIT_PER_WINDOW = 500;
 const INVO_RATE_LIMIT_WINDOW_MS = 300_000;
-// Leaves headroom for mimic-resolver calls (conflict resolution) and other
-// occasional Invo traffic (adopt/reconcile/preflight CLI runs, the account
-// itself), which aren't counted in the per-cycle call estimate below.
-const SAFETY_FACTOR = 0.6;
+// Confirmed live 2026-08-11: this budget is shared with whatever else is on
+// the same IP, including the user's own Invo app usage on the same home
+// network - a genuinely unpredictable, uncontrollable amount of concurrent
+// traffic, not just mimic-resolver calls or other CLI runs. A 0.6 target
+// still left the daemon and the user's own live browsing/following
+// competing for the same budget with ~2 hours of zero recovery as a result.
+// Deliberately conservative so there's real headroom left over for that,
+// even if it means slower cycles at higher follow counts.
+const SAFETY_FACTOR = 0.25;
 
 /**
  * Minimum safe gap between cycle starts given how many portfolios are
