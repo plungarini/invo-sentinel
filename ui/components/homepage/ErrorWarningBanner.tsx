@@ -6,7 +6,7 @@ export default function ErrorWarningBanner({ recentErrors }: { recentErrors: Rec
 	if (recentErrors.length === 0) return null;
 
 	return (
-		<div className="rounded-2xl bg-loss/10 p-4">
+		<div className="rounded-xl bg-loss/10 p-4">
 			<div className="mb-3 flex items-center gap-2 px-1">
 				<AlertTriangle className="h-4 w-4 text-loss" strokeWidth={2.25} />
 				<h3 className="text-[15px] font-bold text-loss">Recent Errors</h3>

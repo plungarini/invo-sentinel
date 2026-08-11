@@ -13,8 +13,8 @@ export const metadata: Metadata = {
 function RightRailSkeleton() {
 	return (
 		<aside className="hidden w-[320px] shrink-0 pb-8 pr-6 pt-[76px] xl:block">
-			<div className="animate-pulse rounded-2xl border border-border p-4">
-				<div className="mb-4 h-4 w-32 rounded bg-surface" />
+			<div className="animate-pulse rounded-xl border border-border p-4">
+				<div className="mb-4 h-4 w-32 rounded-md bg-surface" />
 				<div className="flex flex-col gap-2.5">
 					{Array.from({ length: 4 }).map((_, i) => (
 						<div key={i} className="h-14 w-full rounded-xl bg-surface" />

@@ -30,7 +30,7 @@ export default function Modal({
 			onClick={onClose}
 		>
 			<div
-				className="animate-modal-content scrollbar-thin max-h-[88vh] w-full max-w-[560px] overflow-y-auto rounded-t-3xl bg-card sm:rounded-3xl"
+				className="animate-modal-content scrollbar-thin max-h-[88vh] w-full max-w-[560px] overflow-y-auto rounded-t-2xl bg-card sm:rounded-2xl"
 				onClick={(e) => e.stopPropagation()}
 			>
 				<div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-card/90 px-5 py-4 backdrop-blur-xl">
