@@ -118,6 +118,16 @@ export default function PnlOverTimeChart({
 }) {
 	const transferMarkers = useMemo(() => buildTransferMarkers(pnlOverTime, transfers), [pnlOverTime, transfers]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
+	// Where the zero-crossing falls in the gradient (0 = top/all-loss, 1 = bottom/all-profit) -
+	// lets the area/line fade from teal to red right at the point the cumulative PnL crosses zero.
+	const zeroOffset = useMemo(() => {
+		const values = pnlOverTime.map((p) => p.cumulativePnlUsd);
+		const dataMax = Math.max(...values);
+		const dataMin = Math.min(...values);
+		if (dataMax <= 0) return 0;
+		if (dataMin >= 0) return 1;
+		return dataMax / (dataMax - dataMin);
+	}, [pnlOverTime]);
 
 	if (pnlOverTime.length < 2) {
 		return (
@@ -138,9 +148,13 @@ export default function PnlOverTimeChart({
 				<ResponsiveContainer width="100%" height="100%">
 					<AreaChart data={pnlOverTime} margin={{ top: 20, right: isMobile ? 4 : 12, bottom: 0, left: isMobile ? -14 : -20 }}>
 						<defs>
+							<linearGradient id="pnlStroke" x1="0" y1="0" x2="0" y2="1">
+								<stop offset={Math.max(0, zeroOffset - 0.02)} stopColor={COLOR_PROFIT} />
+								<stop offset={Math.min(1, zeroOffset + 0.02)} stopColor={COLOR_LOSS} />
+							</linearGradient>
 							<linearGradient id="pnlFill" x1="0" y1="0" x2="0" y2="1">
-								<stop offset="0%" stopColor={COLOR_PROFIT} stopOpacity={0.25} />
-								<stop offset="100%" stopColor={COLOR_PROFIT} stopOpacity={0} />
+								<stop offset={Math.max(0, zeroOffset - 0.02)} stopColor={COLOR_PROFIT} stopOpacity={0.25} />
+								<stop offset={Math.min(1, zeroOffset + 0.02)} stopColor={COLOR_LOSS} stopOpacity={0.25} />
 							</linearGradient>
 						</defs>
 						<CartesianGrid stroke={COLOR_BORDER} strokeDasharray="3 3" vertical={false} />
@@ -185,7 +199,7 @@ export default function PnlOverTimeChart({
 						<Area
 							type="monotone"
 							dataKey="cumulativePnlUsd"
-							stroke={COLOR_PROFIT}
+							stroke="url(#pnlStroke)"
 							strokeWidth={2}
 							fill="url(#pnlFill)"
 							dot={false}
