@@ -2,6 +2,9 @@ import { SlowCallTracker } from '../services/call-timing.js';
 import '../services/http-dispatcher.js';
 import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../types.js';
 
+/** Still 429 after every retry was exhausted - the shared IP budget itself is down, not just this one call. */
+export class RateLimitExhaustedError extends Error {}
+
 const BASE = 'https://api.invoapp.com';
 const MAX_RATE_LIMIT_RETRIES = 3;
 // Invo's own retry-after during the 2026-08-11 rate-limit incident ran
@@ -221,6 +224,18 @@ export class InvoClient {
 			// as a slow_api_call instead of just an unexplained slow cycle.
 			await this.slowCalls.track(`${path} (429 retry ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})`, () => sleep(boundedDelayMs));
 			return this.post(path, body, retriedAuth, rateLimitAttempt + 1);
+		}
+
+		if (resp.status === 429) {
+			// All retries exhausted and still 429 - the shared IP budget is
+			// still down, not just this one call. Distinguishable from a
+			// generic error so callers processing many portfolios in one
+			// cycle (reconciler.ts) can stop after the first one instead of
+			// each burning its own full capped-retry sequence in turn -
+			// confirmed live 2026-08-11: 7 portfolios each retrying to their
+			// own cap stacked up to a 347s cycle even with the per-call cap in
+			// place, since the cap bounds one call, not the whole cycle.
+			throw new RateLimitExhaustedError(`Invo ${path} still rate-limited after ${MAX_RATE_LIMIT_RETRIES} retries`);
 		}
 
 		if (resp.status >= 400) {
