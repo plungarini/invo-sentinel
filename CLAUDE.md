@@ -86,6 +86,17 @@ Hyperliquid nets positions **by coin**, not by trader, so a pre-existing real po
 
 Types in [src/types.ts](src/types.ts) mirror Invo's own reverse-engineered API field names 1:1 (no renaming), so payloads can be diff'd directly against real responses while debugging. Note `entrySize` is the trader's margin as a **percent of their own balance**, not yours - confirmed against the Invo app UI, undocumented elsewhere.
 
+## Refreshing docs/screenshots
+
+```bash
+npx playwright install chromium   # one-time, if not already installed
+npm run docs:screenshots          # writes docs/screenshots/{overview,analytics,wallet,tools}.png
+```
+
+[scripts/screenshot-docs.ts](scripts/screenshot-docs.ts) drives a real headless Chromium (Playwright, a `devDependencies` entry) at a fixed 1440x900 viewport and saves a lossless PNG straight to disk per page - deliberately not a browser-extension/remote-control screenshot tool, which re-encodes to a downscaled, compressed JPEG and visibly loses sharpness on text and gradients by comparison (confirmed side-by-side while building this).
+
+Defaults to `http://invo.pi` (override with `SCREENSHOT_BASE_URL`), not a local `npm run ui:dev` instance - the deployed prod dashboard has real daemon status, cycle history, and recent-activity data that a fresh local dev server won't, and the screenshots are meant to show the dashboard as it actually looks in use. Each page waits for a piece of real content (e.g. "Cumulative PnL") before capturing, since client-side data fetching means the HTML is present well before the numbers are.
+
 ## Comments
 
 Comments should be rare, reserved for genuinely special occasions - a hidden constraint, a non-obvious workaround, a subtle invariant that would surprise a reader (e.g. the HL signing quirks noted above). Default to no comment.
