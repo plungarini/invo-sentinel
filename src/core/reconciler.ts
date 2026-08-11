@@ -1,4 +1,5 @@
 import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
+import { RateLimitExhaustedError } from '../clients/invo-client.js';
 import type { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import type { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import type { Logger } from '../services/logger.js';
@@ -55,10 +56,30 @@ export class Reconciler {
 		const riskEntries = this.portfolioRiskStore.sync(portfolios);
 
 		const perPortfolio: { portfolio: FollowedPortfolio; investments: OpenInvestment[] | null }[] = [];
-		for (const portfolio of portfolios) {
+		for (const [i, portfolio] of portfolios.entries()) {
 			try {
 				perPortfolio.push({ portfolio, investments: await this.poller.fetchOpenInvestments(portfolio.id) });
 			} catch (e: any) {
+				if (e instanceof RateLimitExhaustedError) {
+					// The shared IP budget itself is down, not just this one
+					// portfolio's call - every remaining portfolio this cycle
+					// would fail the exact same way. Confirmed live 2026-08-11:
+					// retrying each one to its own capped limit anyway stacked
+					// 7 portfolios x ~30s into a 347s cycle even with the
+					// per-call cap in place. Stop here instead; the next cycle
+					// (already correctly paced by poll-schedule.ts) retries
+					// everything fresh.
+					const remaining = portfolios.slice(i);
+					this.log({
+						type: 'rate_limit_exhausted_skipping_rest_of_cycle',
+						portfolioId: portfolio.id,
+						title: portfolio.title,
+						skippedCount: remaining.length,
+						skippedPortfolios: remaining.map((p) => p.title),
+					});
+					for (const skipped of remaining) perPortfolio.push({ portfolio: skipped, investments: null });
+					break;
+				}
 				this.log({
 					type: 'error',
 					source: 'fetch_open_investments',
