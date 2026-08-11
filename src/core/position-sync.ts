@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'crypto';
-import { orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
+import { extractAvgFillPrice, orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
@@ -54,7 +54,7 @@ export class PositionSync {
 	 * Opens a brand-new tracked trade, adjusts an existing one toward the
 	 * trader's current margin %, or auto-adopts / flags a pre-existing real
 	 * position it just discovered. Mutates `state` in place; caller persists.
-	 * `risk` is per-call, not fixed at construction — the caller resolves
+	 * `risk` is per-call, not fixed at construction - the caller resolves
 	 * it per-portfolio (see `resolvePortfolioRisk`) since a followed
 	 * portfolio may have its own margin-band override.
 	 */
@@ -80,13 +80,13 @@ export class PositionSync {
 
 		// Cheap, synchronous, no network: if this baseId isn't tracked yet and
 		// another one already owns this exact coin, there's nothing further
-		// worth computing this cycle — bail out before spending any API calls
+		// worth computing this cycle - bail out before spending any API calls
 		// on equity/prices/positions we'd just discard. This daemon's
 		// per-baseId delta math assumes a tracked baseId owns the WHOLE real
 		// position on a coin, which breaks the moment a second one shares it
 		// (whichever opens second would size its order against an assumed
 		// margin of $0, stacking on top of / netting against the first one's
-		// real, already-tracked exposure) — not currently supported, so this
+		// real, already-tracked exposure) - not currently supported, so this
 		// is flagged rather than silently corrupting either entry's margin.
 		if (!state[baseId]?.ourBaseShortId) {
 			const otherTrackedOnCoin = Object.entries(state).find(([bid, s]) => bid !== baseId && s.coin === coin);
@@ -129,7 +129,7 @@ export class PositionSync {
 		};
 
 		// The user is always free to open/edit/close positions manually on
-		// Hyperliquid directly — this daemon must never crash or fight that.
+		// Hyperliquid directly - this daemon must never crash or fight that.
 		// Everything below (delta sizing) is computed purely from our OWN
 		// `entry.marginUsd`, never cross-checked against the real exchange
 		// position, so a manual edit desyncs that baseline silently unless
@@ -139,7 +139,7 @@ export class PositionSync {
 		//    trader's own signal is still open. Respect that as a deliberate
 		//    stop-managing instruction: permanently ignore this baseId
 		//    rather than silently reopening it next cycle (which is exactly
-		//    what would otherwise happen — a fresh, empty `entry` cycling
+		//    what would otherwise happen - a fresh, empty `entry` cycling
 		//    right back through the brand-new-open path).
 		//  - Real position exists but its size (or direction) has changed
 		//    manually → resync `entry.marginUsd` to the REAL live size
@@ -152,7 +152,7 @@ export class PositionSync {
 				ignored[baseId] = {
 					coin,
 					portfolioId: investment.portfolio?.id,
-					reason: 'tracked position has no matching real HL position anymore — closed manually or externally; permanently stopping management of this specific trade rather than silently reopening it',
+					reason: 'tracked position has no matching real HL position anymore - closed manually or externally; permanently stopping management of this specific trade rather than silently reopening it',
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
@@ -170,7 +170,7 @@ export class PositionSync {
 				ignored[baseId] = {
 					coin,
 					portfolioId: investment.portfolio?.id,
-					reason: `real HL position direction (${parseFloat(realPosition.szi) > 0 ? 'long' : 'short'}) no longer matches tracked direction (${entry.isBuy ? 'long' : 'short'}) — manual intervention detected; permanently stopping management of this specific trade`,
+					reason: `real HL position direction (${parseFloat(realPosition.szi) > 0 ? 'long' : 'short'}) no longer matches tracked direction (${entry.isBuy ? 'long' : 'short'}) - manual intervention detected; permanently stopping management of this specific trade`,
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
@@ -195,7 +195,7 @@ export class PositionSync {
 						trader: investment.owner?.username,
 						trackedMarginUsd: entry.marginUsd,
 						realMarginUsd,
-						detail: 'real HL position size no longer matched tracked margin — resynced before computing this cycle\'s delta',
+						detail: 'real HL position size no longer matched tracked margin - resynced before computing this cycle\'s delta',
 					});
 					entry.marginUsd = realMarginUsd;
 				}
@@ -203,7 +203,7 @@ export class PositionSync {
 		}
 
 		// No other tracked baseId owns this coin. There may still be a REAL,
-		// untracked position on it that pre-dates the daemon — wrong
+		// untracked position on it that pre-dates the daemon - wrong
 		// direction vs. it → definitely not this one, skip quietly (some
 		// other baseId may still be the right one this cycle). Right
 		// direction, and no other followed trader shares both this coin and
@@ -270,6 +270,8 @@ export class PositionSync {
 					entry.ourBaseShortId = genBaseShortId();
 					entry.leverage = leverage;
 					entry.isBuy = isBuy;
+					entry.entryPrice = price || undefined;
+					entry.openedAt = new Date().toISOString();
 					state[baseId] = { ...entry };
 					log({
 						type: 'auto_adopted',
@@ -283,12 +285,12 @@ export class PositionSync {
 			}
 		}
 
-		// Still no real position to adopt — this would be a genuinely brand
+		// Still no real position to adopt - this would be a genuinely brand
 		// new order. Gate it on freshness: past maxAgeMinutes, permanently
 		// refuse regardless of current PnL (a same-coin conflict clearing
 		// months after the fact doesn't make an old trade idea fresh again).
 		// Within the fresh window but already up more than maxProfitPct,
-		// refuse for now, but only for now — re-evaluated next cycle.
+		// refuse for now, but only for now - re-evaluated next cycle.
 		if (!entry.ourBaseShortId) {
 			const verdict = evaluateStaleEntry(investment, staleEntry);
 			if (verdict.skip) {
@@ -317,7 +319,7 @@ export class PositionSync {
 						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
 						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
 						maxProfitPct: staleEntry.maxProfitPct,
-						note: 'temporary — still within the fresh window; reconsidered next cycle',
+						note: 'temporary - still within the fresh window; reconsidered next cycle',
 					});
 				}
 				return;
@@ -342,18 +344,18 @@ export class PositionSync {
 		let deltaNotionalUsd = Math.abs(deltaMarginUsd) * leverage;
 
 		// HL enforces a hard $10 minimum order notional and rejects anything
-		// below it outright — checked BEFORE attempting anything, so a
+		// below it outright - checked BEFORE attempting anything, so a
 		// doomed-to-fail order never actually hits the exchange.
 		if (deltaNotionalUsd < HL_MIN_NOTIONAL_USD) {
 			if (wasNewPosition && isIncrease) {
-				// Bump a brand-new open up to the floor, with a small buffer —
+				// Bump a brand-new open up to the floor, with a small buffer - 
 				// rounding deltaSize to szDecimals can otherwise undershoot
 				// back below $10 and get rejected right back (seen live: a
 				// $10.00 target rounded down to $9.997).
 				deltaNotionalUsd = HL_MIN_NOTIONAL_USD * 1.02;
 			} else {
 				// An already-tracked position's top-up (or a reduce) landing
-				// below the floor genuinely cannot be placed at all — HL
+				// below the floor genuinely cannot be placed at all - HL
 				// would reject it identically every cycle. Leave it for next
 				// cycle, when targetMarginUsd has drifted further from
 				// entry.marginUsd, instead of hammering the exchange with a
@@ -397,6 +399,8 @@ export class PositionSync {
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
 				ownerUsername: investment.owner?.username,
+				entryPrice: entry.entryPrice ?? (wasNewPosition ? price : undefined),
+				openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
 			};
 			log({
 				type: 'dry_run_' + (wasNewPosition ? 'open' : isIncrease ? 'increase' : 'reduce'),
@@ -427,7 +431,7 @@ export class PositionSync {
 		// HL responds 200 OK even when it rejected the order outright (e.g. an
 		// invalid price); the real outcome is nested in the response body.
 		// Trusting an unfilled order here would tag state/Invo as opened when
-		// nothing actually happened on the exchange — leave both untouched so
+		// nothing actually happened on the exchange - leave both untouched so
 		// the same delta gets retried, unchanged, next cycle.
 		const fillError = orderFillError(orderResult);
 		if (fillError) {
@@ -450,14 +454,14 @@ export class PositionSync {
 		if (wasNewPosition) {
 			// recordClose's `baseShortId` is confirmed <=10 characters (live
 			// evidence: sending recordOpen's server-assigned UUID got a 400
-			// "Too big: expected string to have <=10 characters" — ruling that
+			// "Too big: expected string to have <=10 characters" - ruling that
 			// out definitively). A client-generated 10-char id was tried first
 			// and got 404 NOT_FOUND (right format, but Invo never learned that
-			// specific value — recordOpen's schema hard-rejects a client-
+			// specific value - recordOpen's schema hard-rejects a client-
 			// supplied baseShortId outright). The trader's OWN
 			// investment.baseShortId is the one remaining 10-char-format
 			// candidate available, and it's exactly what Invo's own
-			// /dex/trade mimic-tracking is keyed by — next best-evidenced
+			// /dex/trade mimic-tracking is keyed by - next best-evidenced
 			// guess, not yet confirmed either way.
 			ourBaseShortId = investment.baseShortId;
 			try {
@@ -488,6 +492,8 @@ export class PositionSync {
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,
+			entryPrice: entry.entryPrice ?? (wasNewPosition ? extractAvgFillPrice(orderResult) ?? price : undefined),
+			openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
 		};
 
 		log({
@@ -534,7 +540,7 @@ export class PositionSync {
 		const closeResult = await hl.closePosition(entry.coin, szDecimals);
 
 		// Same trap as opens: a 200 OK can still mean the exchange rejected
-		// the order. If it did, the real position is still open — do NOT
+		// the order. If it did, the real position is still open - do NOT
 		// drop tracking for it, or it'll be silently forgotten while still
 		// live on the wallet.
 		const fillError = orderFillError(closeResult);

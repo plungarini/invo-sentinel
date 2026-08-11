@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+:root {
+	/* Matched against the real Invo app's own palette (2026-08-11 reference screenshot). */
+	--bg: #0b0b0b;
+	--card: #141414;
+	--surface: #141414;
+	--surface-hover: #1d1d1e;
+	--active-pill: #171717;
+	--border: #232326;
+	--text: #f5f5f7;
+	--text-muted: #8b8b90;
+	/* Truly de-emphasized text (inactive nav items) - much dimmer than --text-muted, which is still meant to read easily as secondary body copy. */
+	--text-faint: #49484d;
+	--profit: #1fdb8c;
+	--loss: #ff5449;
+	--accent: #4a9eff;
+	--cta-from: #3b82f6;
+	--cta-to: #2563eb;
+	--badge-amber: #ff9f0a;
+}
+
+@theme inline {
+	--color-bg: var(--bg);
+	--color-card: var(--card);
+	--color-surface: var(--surface);
+	--color-surface-hover: var(--surface-hover);
+	--color-active-pill: var(--active-pill);
+	--color-border: var(--border);
+	--color-text: var(--text);
+	--color-text-muted: var(--text-muted);
+	--color-text-faint: var(--text-faint);
+	--color-profit: var(--profit);
+	--color-loss: var(--loss);
+	--color-accent: var(--accent);
+	--color-cta-from: var(--cta-from);
+	--color-cta-to: var(--cta-to);
+	--color-badge-amber: var(--badge-amber);
+}
+
+html {
+	font-size: 16px;
+}
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-size: 0.9375rem;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+@keyframes modal-scrim {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes modal-content {
+	from {
+		opacity: 0;
+		transform: scale(0.97) translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1) translateY(0);
+	}
+}
+
+.animate-modal-scrim {
+	animation: modal-scrim 150ms ease-out;
+}
+
+.animate-modal-content {
+	animation: modal-content 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-modal-content {
+		animation: none;
+	}
+}
+
+@layer utilities {
+	/* Tailwind won't generate bg-text/text-bg utilities - "text" and "bg" collide with its
+	   own reserved prefixes - so the inverted active-nav pill needs an explicit rule. */
+	.nav-pill-active {
+		background-color: var(--active-pill);
+		color: var(--text);
+	}
+
+	.scrollbar-thin {
+		scrollbar-width: thin;
+		scrollbar-color: var(--surface-hover) transparent;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar-thumb {
+		background-color: var(--surface-hover);
+		border-radius: 9999px;
+		border: 3px solid transparent;
+		background-clip: content-box;
+	}
+
+	.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+		background-color: #35353a;
+	}
+}

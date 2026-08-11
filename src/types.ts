@@ -1,9 +1,30 @@
-/** A portfolio (trader) you follow on Invo. */
+/**
+ * A portfolio (trader) you follow on Invo. Field names match Invo's own
+ * `get_users_followed_portfolios` response 1:1 where possible - confirmed
+ * live 2026-08-11 against a real account. Notably there is no portfolio-level
+ * image at all in this API; only the owner (a person) has an avatar.
+ */
 export interface FollowedPortfolio {
 	id: string;
 	title: string;
+	description?: string | null;
 	ownerId: string;
 	ownerUsername?: string;
+	ownerName?: string;
+	ownerVerified?: boolean;
+	ownerAvatarUrl?: string;
+	ownerAvatarColor?: string;
+	winRate?: number;
+	wonPositions?: number;
+	lostPositions?: number;
+	closedPositions?: number;
+	openPositions?: number;
+	followerCount?: number;
+	currentWinStreak?: number;
+	plSnapshot?: number;
+	avgPlRealized?: number;
+	avgHoldTimeSeconds?: number;
+	liquidated?: boolean;
 }
 
 /**
@@ -46,6 +67,15 @@ export interface PositionState {
 	ourBaseShortId: string;
 	portfolioId?: string;
 	ownerUsername?: string;
+	/**
+	 * OUR OWN fill price (from HL's order response, or the live mid at
+	 * auto-adopt time) - not the trader's `investment.entryPrice`, which is
+	 * on their own timing and useless for computing our PnL. Absent on
+	 * entries written before this field existed.
+	 */
+	entryPrice?: number;
+	/** ISO timestamp of when this entry was first opened/adopted. */
+	openedAt?: string;
 }
 
 /** Full local state, persisted to disk. Keyed by the trader's baseId. */
@@ -75,13 +105,30 @@ export interface RiskConfig {
 	maxLeverage?: number;
 }
 
+/**
+ * One entry from clearinghouseState's assetPositions[].position - HL's own
+ * ground truth for an open position. entryPx/unrealizedPnl/returnOnEquity/
+ * leverage/marginUsed are computed server-side by HL itself and available
+ * regardless of whether this daemon tracks the baseId behind it - the same
+ * numbers a real trading UI (Invo included) would show for any open position.
+ */
 export interface HyperliquidPosition {
 	coin: string;
 	szi: string;
+	leverage: { type: 'cross' | 'isolated'; value: number };
+	entryPx: string;
+	positionValue: string;
+	unrealizedPnl: string;
+	returnOnEquity: string;
+	marginUsed: string;
+	liquidationPx: string | null;
+	maxLeverage: number;
+	/** Funding paid (positive) or received (negative) on this position - HL settles it continuously, not just at close. */
+	cumFunding: { allTime: string; sinceOpen: string; sinceChange: string };
 	[key: string]: unknown;
 }
 
-/** One real fill from HL's own /info userFills — exchange ground truth, not derived from our logs. */
+/** One real fill from HL's own /info userFills - exchange ground truth, not derived from our logs. */
 export interface HyperliquidFill {
 	coin: string;
 	px: string;
@@ -92,7 +139,29 @@ export interface HyperliquidFill {
 	closedPnl: string;
 	oid: number;
 	tid: number;
+	/** USD-denominated, per HL's own fill payload - negative for rebates. */
+	fee?: string;
+	feeToken?: string;
 	[key: string]: unknown;
+}
+
+/**
+ * One entry from HL's /info userNonFundingLedgerUpdates - deposits,
+ * withdrawals, and internal transfers, independent of trading activity.
+ * `delta.type` is HL's own classification (e.g. 'deposit', 'withdraw',
+ * 'send', 'receive', 'accountClassTransfer'); shape otherwise varies by
+ * type, so most fields beyond `type`/`usdcValue` are left as unknown.
+ */
+export interface HyperliquidLedgerUpdate {
+	time: number;
+	hash: string;
+	delta: {
+		type: string;
+		usdcValue?: string;
+		amount?: string;
+		token?: string;
+		[key: string]: unknown;
+	};
 }
 
 /**
@@ -112,7 +181,7 @@ export interface ClosedInvestment extends OpenInvestment {
  * `.copy-portfolio-risk.json`. `title`/`ownerUsername` are display-only,
  * kept fresh automatically, never used for logic. `minMarginPct`/
  * `maxMarginPct` are whole-number percent (matching `.env`'s
- * MIN_MARGIN_PCT/MAX_MARGIN_PCT convention, e.g. 3 for 3%) — `null` means
+ * MIN_MARGIN_PCT/MAX_MARGIN_PCT convention, e.g. 3 for 3%) - `null` means
  * "no override, use the .env default for this field".
  */
 export interface PortfolioRiskEntry {
