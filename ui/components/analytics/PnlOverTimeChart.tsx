@@ -136,7 +136,7 @@ export default function PnlOverTimeChart({
 		<Card title="Cumulative PnL">
 			<div className="h-72 w-full">
 				<ResponsiveContainer width="100%" height="100%">
-					<AreaChart data={pnlOverTime} margin={{ top: 20, right: isMobile ? 4 : 12, bottom: 0, left: isMobile ? -28 : -20 }}>
+					<AreaChart data={pnlOverTime} margin={{ top: 20, right: isMobile ? 4 : 12, bottom: 0, left: isMobile ? -14 : -20 }}>
 						<defs>
 							<linearGradient id="pnlFill" x1="0" y1="0" x2="0" y2="1">
 								<stop offset="0%" stopColor={COLOR_PROFIT} stopOpacity={0.25} />
