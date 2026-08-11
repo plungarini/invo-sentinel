@@ -1,5 +1,6 @@
 import Badge from "@/components/shared/Badge";
 import { formatUsd, formatPct } from "@/lib/format";
+import { computeLiqFilledPct } from "@/lib/liquidation";
 import type { WalletPosition } from "@/hooks/useWallet";
 
 export default function PositionRow({
@@ -32,14 +33,7 @@ export default function PositionRow({
 	const allocationPct = initialMarginUsd != null && accountValueUsd > 0 ? (initialMarginUsd / accountValueUsd) * 100 : null;
 
 	const liqPx = position.liquidationPx != null ? parseFloat(position.liquidationPx) : null;
-	// Distance from entry to liq is fixed; risk is how much of that range is still left
-	// between mark and liq, not how far mark has drifted from entry - a favorable move
-	// increases mark's distance from liq beyond the original range, correctly clamping to 0%
-	// instead of (wrongly) still counting the move as "progress" via an absolute-value diff from entry.
-	const liqRange = entryPx && liqPx != null ? Math.abs(entryPx - liqPx) : null;
-	const liqDistance = markPx != null && liqPx != null ? Math.abs(markPx - liqPx) : null;
-	const liqFilledPct =
-		liqRange && liqRange > 0 && liqDistance != null ? Math.max(0, Math.min(100, (1 - liqDistance / liqRange) * 100)) : null;
+	const liqFilledPct = computeLiqFilledPct(entryPx, markPx, liqPx);
 	// 3-bar severity gauge: always at least 1 bar lit once there's a real reading, escalating white -> amber -> red.
 	const liqBarsLit = liqFilledPct == null ? 0 : liqFilledPct >= 66.67 ? 3 : liqFilledPct >= 33.34 ? 2 : 1;
 	const liqBarColor = liqBarsLit === 3 ? "bg-loss" : liqBarsLit === 2 ? "bg-badge-amber" : "bg-text";
