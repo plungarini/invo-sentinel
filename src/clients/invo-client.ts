@@ -4,6 +4,15 @@ import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../typ
 
 const BASE = 'https://api.invoapp.com';
 const MAX_RATE_LIMIT_RETRIES = 3;
+// Invo's own retry-after during the 2026-08-11 rate-limit incident ran
+// 78-296s per attempt (confirmed live, a genuine Cloudflare fixed-window
+// budget, not a bug on our end) - honoring that in full, inside a single
+// call, is what let one cycle balloon to ~10 minutes regardless of
+// POLL_INTERVAL_MS/the adaptive poll-schedule.ts throttle between cycles.
+// Capping it here means a still-limited call fails fast and defers the
+// real wait to the next (already correctly-paced) cycle instead of
+// blocking synchronously for minutes inside this one.
+const MAX_RATE_LIMIT_RETRY_DELAY_MS = 10_000;
 // A hung connection here (no timeout) blocks the whole reconcile cycle
 // indefinitely with nothing ever thrown - silent, no error log, no crash,
 // just no forward progress. Bounded so a stall becomes an ordinary
@@ -202,7 +211,7 @@ export class InvoClient {
 		if (resp.status === 429 && rateLimitAttempt < MAX_RATE_LIMIT_RETRIES) {
 			const retryAfterHeader = resp.headers.get('retry-after');
 			const delayMs = retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : 1000 * 2 ** rateLimitAttempt;
-			const boundedDelayMs = Number.isFinite(delayMs) ? delayMs : 1000 * 2 ** rateLimitAttempt;
+			const boundedDelayMs = Math.min(Number.isFinite(delayMs) ? delayMs : 1000 * 2 ** rateLimitAttempt, MAX_RATE_LIMIT_RETRY_DELAY_MS);
 			// This sleep is the actual cost of a 429, often tens of seconds to
 			// minutes per Invo's own retry-after - confirmed live 2026-08-11,
 			// three ~5min cycles back to back with zero errors logged, because
