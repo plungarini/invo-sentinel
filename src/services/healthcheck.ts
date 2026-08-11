@@ -9,7 +9,7 @@ async function send(url: string, suffix: string, timeoutMs: number): Promise<voi
 
 /**
  * Optional integration with an external "dead man's switch" monitor (e.g.
- * healthchecks.io) — set HEALTHCHECK_PING_URL to enable, leave unset to
+ * healthchecks.io) - set HEALTHCHECK_PING_URL to enable, leave unset to
  * disable entirely. All three fire-and-forget variants never throw and are
  * never awaited by callers: a slow or unreachable monitor must never delay
  * or stall actual trading logic. `/start` + success/fail (rather than a
@@ -40,7 +40,7 @@ export function pingFail(url: string | undefined, log: Logger): void {
 
 /**
  * Only for the fatal crash handlers, where the process exits immediately
- * after — a fire-and-forget ping would very likely get killed mid-flight
+ * after - a fire-and-forget ping would very likely get killed mid-flight
  * and never actually leave the machine, defeating the point of an
  * immediate failure alert right when it matters most. Awaited with a short
  * bounded timeout so a dead network can't hang process shutdown.
@@ -50,6 +50,6 @@ export async function pingFailAwaited(url: string | undefined, timeoutMs = 3_000
 	try {
 		await send(url, 'fail', timeoutMs);
 	} catch {
-		// Best-effort only — the process is exiting regardless.
+		// Best-effort only - the process is exiting regardless.
 	}
 }

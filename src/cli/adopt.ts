@@ -65,13 +65,13 @@ async function main() {
 		process.exit(1);
 	}
 
-	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
+	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
 	const state = stateStore.load();
 
 	if (state[baseId]) {
 		console.error(`baseId ${baseId} is already tracked:`);
 		console.error(JSON.stringify(state[baseId], null, 2));
-		console.error('Refusing to overwrite. Edit .copy-state.json by hand if you really need to change it.');
+		console.error('Refusing to overwrite. Edit data/.copy-state.json by hand if you really need to change it.');
 		process.exit(1);
 	}
 

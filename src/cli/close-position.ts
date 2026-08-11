@@ -50,7 +50,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
+	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
 	const state = stateStore.load();
 	const clearedBaseIds = Object.keys(state).filter((baseId) => state[baseId].coin === coin);
 	for (const baseId of clearedBaseIds) delete state[baseId];

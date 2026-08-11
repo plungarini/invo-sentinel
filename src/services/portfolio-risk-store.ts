@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import type { FollowedPortfolio, PortfolioRiskEntry } from '../types.js';
 import type { Logger } from './logger.js';
 
 /**
  * Persists per-portfolio margin-band overrides to `.copy-portfolio-risk.json`
- * — a user-editable file, not machine-only state like StateStore/
+ * - a user-editable file, not machine-only state like StateStore/
  * IgnoredTradesStore. `sync()` is what keeps it an accurate, current
  * reflection of who's actually followed: called every cycle with the
  * freshly-fetched followed-portfolios list, it adds a blank entry for any
@@ -29,6 +30,7 @@ export class PortfolioRiskStore {
 
 	save(entries: PortfolioRiskEntry[]): void {
 		try {
+			mkdirSync(dirname(this.path), { recursive: true });
 			writeFileSync(this.path, JSON.stringify(entries, null, 2));
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'portfolio_risk_store_save', message: e.message });
@@ -37,7 +39,7 @@ export class PortfolioRiskStore {
 
 	/**
 	 * Only writes to disk when something actually changed (add/remove/
-	 * title drift) — a user's hand-edited minMarginPct/maxMarginPct values
+	 * title drift) - a user's hand-edited minMarginPct/maxMarginPct values
 	 * are never rewritten just because a cycle ran. Returns the synced
 	 * list, ordered to match `followed`.
 	 */

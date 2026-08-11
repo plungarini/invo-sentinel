@@ -4,7 +4,7 @@ import type { ClosedInvestment, FollowedPortfolio, OpenInvestment } from '../typ
 const BASE = 'https://api.invoapp.com';
 const MAX_RATE_LIMIT_RETRIES = 3;
 // A hung connection here (no timeout) blocks the whole reconcile cycle
-// indefinitely with nothing ever thrown — silent, no error log, no crash,
+// indefinitely with nothing ever thrown - silent, no error log, no crash,
 // just no forward progress. Bounded so a stall becomes an ordinary
 // catchable error instead, retried next cycle.
 //
@@ -53,6 +53,32 @@ export interface RecordClosePayload {
 
 function sleep(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Shared by both the followed-list and get-by-id endpoints - same raw `portfolio` object shape either way. */
+function mapPortfolio(portfolio: any): FollowedPortfolio {
+	return {
+		id: portfolio.id,
+		title: portfolio.title,
+		description: portfolio.description,
+		ownerId: portfolio.ownerId,
+		ownerUsername: portfolio.owner?.username,
+		ownerName: portfolio.owner?.name,
+		ownerVerified: portfolio.owner?.verified,
+		ownerAvatarUrl: portfolio.owner?.ownerAvatarUrl,
+		ownerAvatarColor: portfolio.owner?.ownerAvatarColor,
+		winRate: portfolio.winRate,
+		wonPositions: portfolio.wonPositions,
+		lostPositions: portfolio.lostPositions,
+		closedPositions: portfolio.closedPositions,
+		openPositions: portfolio.openPositions,
+		followerCount: portfolio.followerCount,
+		currentWinStreak: portfolio.currentWinStreak,
+		plSnapshot: portfolio.plSnapshot,
+		avgPlRealized: portfolio.avgPlRealized,
+		avgHoldTimeSeconds: portfolio.avgHoldTimeSeconds,
+		liquidated: portfolio.liquidated,
+	};
 }
 
 /**
@@ -183,12 +209,19 @@ export class InvoClient {
 			userId: this.getUserId(),
 			params: { sinceTimestamp: 0, size: 100 },
 		});
-		return (data.savedPortfolios ?? []).map((sp: any) => ({
-			id: sp.portfolio.id,
-			title: sp.portfolio.title,
-			ownerId: sp.portfolio.ownerId,
-			ownerUsername: sp.portfolio.owner?.username,
-		}));
+		return (data.savedPortfolios ?? []).map((sp: any) => mapPortfolio(sp.portfolio));
+	}
+
+	/**
+	 * Any portfolio by id, followed or not - confirmed live 2026-08-11 by
+	 * tracing app.invoapp.com's own network calls on a portfolio profile page
+	 * (`/v1_0/portfolios/*`/`/dex/portfolio` guesses had all 404'd). Same
+	 * `portfolio` object shape as `get_users_followed_portfolios`, plus
+	 * `isFollowing` - this is what Invo's own public "Discover" browsing uses.
+	 */
+	async getPortfolioById(portfolioId: string): Promise<FollowedPortfolio & { isFollowing: boolean }> {
+		const data = await this.post('/v1_0/portfolios/get_portfolio_by_id', { portfolioId });
+		return { ...mapPortfolio(data.portfolio), isFollowing: !!data.portfolio?.isFollowing };
 	}
 
 	async getOpenInvestments(portfolioId: string): Promise<OpenInvestment[]> {
@@ -201,7 +234,7 @@ export class InvoClient {
 	}
 
 	/**
-	 * The trader's own closed-trade history — includes `closedAt`,
+	 * The trader's own closed-trade history - includes `closedAt`,
 	 * `closingPrice`, `reasonClosed` not present on open investments.
 	 * NOT used by the live reconciler (source of truth for what to mirror
 	 * is still isOpen:true); this is for reconciliation/auditing only, to

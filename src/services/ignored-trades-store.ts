@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import type { IgnoredTradesMap } from '../types.js';
 import type { Logger } from './logger.js';
 
@@ -26,6 +27,7 @@ export class IgnoredTradesStore {
 
 	save(ignored: IgnoredTradesMap): void {
 		try {
+			mkdirSync(dirname(this.path), { recursive: true });
 			writeFileSync(this.path, JSON.stringify(ignored, null, 2));
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'ignored_trades_store_save', message: e.message });

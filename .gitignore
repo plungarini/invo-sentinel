@@ -1,8 +1,10 @@
 node_modules/
 dist/
+ui/.next/
+ui/.env.local
+ui/tsconfig.tsbuildinfo
 .env
 logs/
-.copy-state.json
-.copy-ignored.json
-.copy-portfolio-risk.json
+data/
 INCIDENT_LOG.md
+.claude

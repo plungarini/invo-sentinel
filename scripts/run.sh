@@ -3,14 +3,22 @@
 # fatal errors and exits(1) rather than dying silently (see
 # process.on('uncaughtException'/'unhandledRejection') in
 # src/cli/auto-copy.ts); this script is what actually brings it back up
-# afterward. State (.copy-state.json) and logs/ both persist across
+# afterward. State (data/.copy-state.json) and logs/ both persist across
 # restarts, so a restart picks up right where it left off.
+#
+# Also starts the read-only dashboard UI dev server alongside it, in this
+# same terminal - this is the normal way to run both together. Ctrl+C here
+# stops both.
 #
 # Usage: ./scripts/run.sh [minMarginPct] [maxMarginPct] [--dry-run]
 
 cd "$(dirname "$0")/.."
 
 RESTART_DELAY=5
+
+(cd ui && npm run dev) &
+UI_PID=$!
+trap 'kill "$UI_PID" 2>/dev/null' EXIT INT TERM
 
 while true; do
   echo "[run] starting $(date -u +%Y-%m-%dT%H:%M:%SZ)"

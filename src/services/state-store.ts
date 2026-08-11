@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import type { PositionStateMap } from '../types.js';
 import type { Logger } from './logger.js';
 
@@ -25,6 +26,7 @@ export class StateStore {
 
 	save(state: PositionStateMap): void {
 		try {
+			mkdirSync(dirname(this.path), { recursive: true });
 			writeFileSync(this.path, JSON.stringify(state, null, 2));
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'state_store_save', message: e.message });
