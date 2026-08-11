@@ -1,6 +1,9 @@
 import { Hyperliquid } from 'hyperliquid';
+import { SlowCallTracker } from '../services/call-timing.js';
 import '../services/http-dispatcher.js';
 import type { HyperliquidFill, HyperliquidLedgerUpdate, HyperliquidPosition } from '../types.js';
+
+const slowCalls = new SlowCallTracker('hyperliquid');
 
 // Required on every order for Invo compatibility.
 const INVO_BUILDER = { address: '0x557edb253b1d7ed5f15b248a5a3fd919fa5d3c81', fee: 35 };
@@ -54,22 +57,25 @@ function withRaceTimeout<T>(promise: Promise<T>, ms: number, label: string): Pro
  * inspectable timer instead of an opaque one.
  */
 async function postInfo(body: unknown): Promise<any> {
-	const controller = new AbortController();
-	const timer = setTimeout(
-		() => controller.abort(new Error(`HL /info timed out after ${HL_INFO_TIMEOUT_MS}ms`)),
-		HL_INFO_TIMEOUT_MS,
-	);
-	try {
-		const resp = await fetch('https://api.hyperliquid.xyz/info', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(body),
-			signal: controller.signal,
-		});
-		return await resp.json();
-	} finally {
-		clearTimeout(timer);
-	}
+	const label = `/info:${(body as { type?: string })?.type ?? 'unknown'}`;
+	return slowCalls.track(label, async () => {
+		const controller = new AbortController();
+		const timer = setTimeout(
+			() => controller.abort(new Error(`HL /info timed out after ${HL_INFO_TIMEOUT_MS}ms`)),
+			HL_INFO_TIMEOUT_MS,
+		);
+		try {
+			const resp = await fetch('https://api.hyperliquid.xyz/info', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+				signal: controller.signal,
+			});
+			return await resp.json();
+		} finally {
+			clearTimeout(timer);
+		}
+	});
 }
 
 // HL rejects a perp limit price that violates EITHER of two independent
@@ -142,9 +148,13 @@ export class HyperliquidClient {
 		private enableWs = false,
 	) {}
 
+	drainSlowCalls() {
+		return slowCalls.drain();
+	}
+
 	async connect(): Promise<void> {
 		this.sdk = new Hyperliquid({ privateKey: this.agentKey, walletAddress: this.walletAddress, enableWs: this.enableWs });
-		await withRaceTimeout(this.sdk.connect(), HL_EXCHANGE_TIMEOUT_MS, 'sdk.connect');
+		await slowCalls.track('sdk.connect', () => withRaceTimeout(this.sdk!.connect(), HL_EXCHANGE_TIMEOUT_MS, 'sdk.connect'));
 		if (this.enableWs) {
 			// `webData2` (the one-shot "everything" feed: positions + account value)
 			// is documented but currently rejected outright by HL's WS server -
@@ -224,6 +234,20 @@ export class HyperliquidClient {
 	}
 
 	/**
+	 * HL's own last-24h account-value series (the "day" window of its `portfolio`
+	 * endpoint) - used as the 24h-ago baseline for the dashboard's balance-change
+	 * display. Deliberately not reconstructed from ledger updates + fills locally:
+	 * that would also need funding payments and unrealized PnL on open positions,
+	 * neither of which this client fetches anywhere, whereas HL already computes
+	 * this series itself.
+	 */
+	async getDailyAccountValueHistory(): Promise<{ time: number; accountValueUsd: number }[]> {
+		const periods = await postInfo({ type: 'portfolio', user: this.walletAddress });
+		const day = (periods as [string, { accountValueHistory: [number, string][] }][]).find(([period]) => period === 'day');
+		return (day?.[1]?.accountValueHistory ?? []).map(([time, value]) => ({ time, accountValueUsd: parseFloat(value) }));
+	}
+
+	/**
 	 * Approved API agent wallets under this account, straight from Hyperliquid
 	 * itself - not derivable locally, since `HL_AGENT_KEY` is just a raw
 	 * private key with no expiry encoded in it (unlike Invo's JWT refresh
@@ -235,10 +259,8 @@ export class HyperliquidClient {
 	}
 
 	async setLeverage(coin: string, leverage: number): Promise<unknown> {
-		return withRaceTimeout(
-			this.getSdk().exchange.updateLeverage(toSdkCoin(coin), 'isolated', leverage),
-			HL_EXCHANGE_TIMEOUT_MS,
-			'updateLeverage',
+		return slowCalls.track('updateLeverage', () =>
+			withRaceTimeout(this.getSdk().exchange.updateLeverage(toSdkCoin(coin), 'isolated', leverage), HL_EXCHANGE_TIMEOUT_MS, 'updateLeverage'),
 		);
 	}
 
@@ -256,19 +278,21 @@ export class HyperliquidClient {
 		const rawPx = isBuy ? mid * (1 + slippagePct) : mid * (1 - slippagePct);
 		const limitPx = roundToValidLimitPx(rawPx, szDecimals);
 
-		return withRaceTimeout(
-			this.getSdk().exchange.placeOrder({
-				coin: toSdkCoin(coin),
-				is_buy: isBuy,
-				sz: parseFloat(size),
-				limit_px: limitPx,
-				order_type: { limit: { tif: 'Ioc' } },
-				reduce_only: false,
-				grouping: 'na',
-				builder: INVO_BUILDER,
-			}),
-			HL_EXCHANGE_TIMEOUT_MS,
-			'placeOrder',
+		return slowCalls.track('placeOrder', () =>
+			withRaceTimeout(
+				this.getSdk().exchange.placeOrder({
+					coin: toSdkCoin(coin),
+					is_buy: isBuy,
+					sz: parseFloat(size),
+					limit_px: limitPx,
+					order_type: { limit: { tif: 'Ioc' } },
+					reduce_only: false,
+					grouping: 'na',
+					builder: INVO_BUILDER,
+				}),
+				HL_EXCHANGE_TIMEOUT_MS,
+				'placeOrder',
+			),
 		);
 	}
 

@@ -91,6 +91,32 @@ export class PositionSync {
 		if (!state[baseId]?.ourBaseShortId) {
 			const otherTrackedOnCoin = Object.entries(state).find(([bid, s]) => bid !== baseId && s.coin === coin);
 			if (otherTrackedOnCoin) {
+				// A conflict alone doesn't excuse this from the same staleness gate
+				// a brand-new open would face below - without this, an old entry
+				// stuck behind a conflict never ages out of `existing_position_conflict`
+				// on its own; it'd get flagged every cycle for as long as the
+				// conflict lasts, even long after it's clearly too stale to ever
+				// mirror faithfully once the conflict does clear.
+				const verdict = evaluateStaleEntry(investment, staleEntry);
+				if (verdict.skip && verdict.permanent) {
+					ignored[baseId] = {
+						coin,
+						portfolioId: investment.portfolio?.id,
+						reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and conflicts with already-tracked ${otherTrackedOnCoin[0]}; permanently ignored regardless of PnL`,
+						ignoredAt: new Date().toISOString(),
+					};
+					log({
+						type: 'stale_entry_ignored',
+						baseId,
+						coin,
+						trader: investment.owner?.username,
+						ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+						pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+						maxAgeMinutes: staleEntry.maxAgeMinutes,
+						note: 'also conflicted with an already-tracked position on this coin',
+					});
+					return;
+				}
 				log({
 					type: 'existing_position_conflict',
 					reason:
@@ -249,6 +275,26 @@ export class PositionSync {
 						});
 						return;
 					} else {
+						const verdict = evaluateStaleEntry(investment, staleEntry);
+						if (verdict.skip && verdict.permanent) {
+							ignored[baseId] = {
+								coin,
+								portfolioId: investment.portfolio?.id,
+								reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and mimic-tracking couldn't confirm it owns this coin; permanently ignored regardless of PnL`,
+								ignoredAt: new Date().toISOString(),
+							};
+							log({
+								type: 'stale_entry_ignored',
+								baseId,
+								coin,
+								trader: investment.owner?.username,
+								ageMinutes: Number(verdict.ageMinutes.toFixed(1)),
+								pnlPct: Number(verdict.pnlPercent.toFixed(2)),
+								maxAgeMinutes: staleEntry.maxAgeMinutes,
+								note: 'also an inconclusive same-coin conflict with another followed trader',
+							});
+							return;
+						}
 						log({
 							type: 'existing_position_conflict',
 							reason: `multiple followed traders hold this coin in the same direction and mimic-tracking couldn't confirm one (${resolution.reason})`,

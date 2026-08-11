@@ -1,13 +1,31 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
 import Sidebar from "@/components/layout/Sidebar";
 import MobileTabBar from "@/components/layout/MobileTabBar";
 import RightRail from "@/components/layout/RightRail";
+import ServiceWorkerRegister from "@/components/layout/ServiceWorkerRegister";
 import "./globals.css";
 
 export const metadata: Metadata = {
 	title: "Invo Sentinel",
 	description: "Local dashboard for the Invo copy-trading daemon.",
+	manifest: "/manifest.json",
+	icons: {
+		icon: [
+			{ url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+			{ url: "/icons/favicon-16.png", sizes: "16x16", type: "image/png" },
+		],
+		apple: "/icons/apple-touch-icon.png",
+	},
+	appleWebApp: {
+		capable: true,
+		statusBarStyle: "black-translucent",
+		title: "Sentinel",
+	},
+};
+
+export const viewport: Viewport = {
+	themeColor: "#0b0b0b",
 };
 
 function RightRailSkeleton() {
@@ -42,6 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 					</Suspense>
 				</div>
 				<MobileTabBar />
+				<ServiceWorkerRegister />
 			</body>
 		</html>
 	);

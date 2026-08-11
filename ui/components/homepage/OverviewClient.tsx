@@ -11,6 +11,7 @@ import ErrorWarningBanner from "@/components/homepage/ErrorWarningBanner";
 import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
 import AgentKeyExpiryWidget from "@/components/homepage/AgentKeyExpiryWidget";
 import DaemonHealthWidget from "@/components/homepage/DaemonHealthWidget";
+import BalanceChange24hBadge from "@/components/shared/BalanceChange24hBadge";
 import RecentActivityWidget from "@/components/homepage/RecentActivityWidget";
 import { formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/types/ui";
@@ -46,6 +47,7 @@ export default function OverviewClient({
 								value={wallet?.accountValueUsd ?? 0}
 								className="mt-1 block text-[36px] font-bold leading-none"
 							/>
+							<BalanceChange24hBadge />
 						</div>
 						<Link
 							href="/wallet"

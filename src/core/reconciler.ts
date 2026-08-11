@@ -199,6 +199,14 @@ export class Reconciler {
 		}
 		if (unfollowedIgnoredChanged) this.ignoredStore.save(ignored);
 
+		// Diagnostic-only (see INCIDENT_LOG.md 2026-08-11 latency-bump
+		// investigation): surfaces which specific outbound call was slow this
+		// cycle, if any, instead of just a slow cycle_complete duration with
+		// no way to tell Invo vs Hyperliquid vs which endpoint apart.
+		for (const call of [...this.poller.drainSlowInvoCalls(), ...this.hl.drainSlowCalls()]) {
+			this.log({ type: 'slow_api_call', ...call });
+		}
+
 		this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt });
 	}
 
