@@ -8,8 +8,8 @@ import type { PnlOverTimePoint } from "@/types/ui";
 import { formatUsd } from "@/lib/format";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 
-const COLOR_PROFIT = "#1fdb8c";
-const COLOR_LOSS = "#ff5449";
+const COLOR_PROFIT = "#11bb91";
+const COLOR_LOSS = "#ff5000";
 const COLOR_BORDER = "#232326";
 const COLOR_TEXT_MUTED = "#8b8b90";
 

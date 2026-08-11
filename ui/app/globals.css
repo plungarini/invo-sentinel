@@ -12,8 +12,8 @@
 	--text-muted: #8b8b90;
 	/* Truly de-emphasized text (inactive nav items) - much dimmer than --text-muted, which is still meant to read easily as secondary body copy. */
 	--text-faint: #49484d;
-	--profit: #1fdb8c;
-	--loss: #ff5449;
+	--profit: #11bb91;
+	--loss: #ff5000;
 	--accent: #4a9eff;
 	--cta-from: #3b82f6;
 	--cta-to: #2563eb;
