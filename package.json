@@ -15,7 +15,8 @@
 		"ui:dev": "npm run dev --prefix ui",
 		"ui:build": "npm run build --prefix ui",
 		"ui:start": "npm run start --prefix ui",
-		"ui:typecheck": "tsc --noEmit --project ui"
+		"ui:typecheck": "tsc --noEmit --project ui",
+		"docs:screenshots": "tsx scripts/screenshot-docs.ts"
 	},
 	"dependencies": {
 		"hyperliquid": "^1.7.7",
@@ -24,6 +25,7 @@
 	"devDependencies": {
 		"@types/node": "^25.5.2",
 		"dotenv": "^17.4.1",
+		"playwright": "^1.62.1",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.2"
 	}
