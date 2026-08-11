@@ -234,6 +234,20 @@ export class HyperliquidClient {
 	}
 
 	/**
+	 * HL's own last-24h account-value series (the "day" window of its `portfolio`
+	 * endpoint) - used as the 24h-ago baseline for the dashboard's balance-change
+	 * display. Deliberately not reconstructed from ledger updates + fills locally:
+	 * that would also need funding payments and unrealized PnL on open positions,
+	 * neither of which this client fetches anywhere, whereas HL already computes
+	 * this series itself.
+	 */
+	async getDailyAccountValueHistory(): Promise<{ time: number; accountValueUsd: number }[]> {
+		const periods = await postInfo({ type: 'portfolio', user: this.walletAddress });
+		const day = (periods as [string, { accountValueHistory: [number, string][] }][]).find(([period]) => period === 'day');
+		return (day?.[1]?.accountValueHistory ?? []).map(([time, value]) => ({ time, accountValueUsd: parseFloat(value) }));
+	}
+
+	/**
 	 * Approved API agent wallets under this account, straight from Hyperliquid
 	 * itself - not derivable locally, since `HL_AGENT_KEY` is just a raw
 	 * private key with no expiry encoded in it (unlike Invo's JWT refresh
