@@ -11,7 +11,11 @@
 		"adopt": "tsx src/cli/adopt.ts",
 		"close": "tsx src/cli/close-position.ts",
 		"reconcile": "tsx src/cli/reconcile.ts",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"ui:dev": "npm run dev --prefix ui",
+		"ui:build": "npm run build --prefix ui",
+		"ui:start": "npm run start --prefix ui",
+		"ui:typecheck": "tsc --noEmit --project ui"
 	},
 	"dependencies": {
 		"hyperliquid": "^1.7.7",

@@ -72,9 +72,9 @@ async function main() {
 	await hl.connect();
 
 	const meta = await hl.getMeta();
-	const stateStore = new StateStore(join(ROOT_DIR, '.copy-state.json'), log);
-	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, '.copy-ignored.json'), log);
-	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, '.copy-portfolio-risk.json'), log);
+	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
+	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), log);
+	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, 'data/.copy-portfolio-risk.json'), log);
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -96,7 +96,8 @@ async function main() {
 		pollIntervalMs: config.pollIntervalMs,
 		trackedPositions: Object.keys(stateStore.load()).length,
 		ignoredTrades: Object.keys(ignoredStore.load()).length,
-		portfolioRiskOverrides: portfolioRiskStore.load().filter((e) => e.minMarginPct != null || e.maxMarginPct != null).length,
+		portfolioRiskOverrides: portfolioRiskStore.load().filter((e) => e.minMarginPct != null || e.maxMarginPct != null)
+			.length,
 		dryRun,
 	});
 
