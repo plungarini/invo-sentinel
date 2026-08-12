@@ -142,7 +142,6 @@ export class PositionSync {
 
 		const clampedFraction = clampMarginFraction(rawPercent, risk);
 		const [equity, mids] = await Promise.all([hl.getAccountValueUsd(), hl.getAllMids()]);
-		const targetMarginUsd = clampedFraction * equity;
 
 		const entry = state[baseId] ?? {
 			coin,
@@ -223,6 +222,12 @@ export class PositionSync {
 						realMarginUsd,
 						detail: 'real HL position size no longer matched tracked margin - resynced before computing this cycle\'s delta',
 					});
+					// Adopting the real size here is now genuinely final, not a
+					// staging step toward re-chasing an absolute trader-%
+					// target - see the fractionDelta targeting below, which
+					// only reacts to the TRADER's own % actually changing, so
+					// a manual top-up/reduce this resync just picked up is
+					// left exactly as the user placed it.
 					entry.marginUsd = realMarginUsd;
 				}
 			}
@@ -372,9 +377,42 @@ export class PositionSync {
 			}
 		}
 
+		// Target is the CURRENT (possibly just-resynced/adopted) margin plus
+		// only the CHANGE in the trader's own fraction since we last acted -
+		// never an absolute clampedFraction*equity target recomputed from
+		// scratch every cycle. That absolute-target approach actively fought
+		// any manual top-up/reduce the user made directly on the exchange:
+		// resync would adopt the user's real (larger or smaller) size as the
+		// new baseline, then the very same cycle immediately "corrected" it
+		// right back toward the trader's unchanged % - silently undoing the
+		// user's own manual action and realizing a real loss on the round
+		// trip (confirmed live 2026-08-12 on ARB/XRP; see INCIDENT_LOG.md).
+		// A brand-new open or a just-auto-adopted position has no prior
+		// fraction to diff against (lastAppliedFraction is unset) - that
+		// first cycle still targets the full absolute amount, same as
+		// before; every cycle after tracks only the trader-driven delta.
+		// `priorFraction` is read once into a local rather than mutating
+		// `entry` directly - entry can be a live reference into `state`, and
+		// this fraction must not land in `state[baseId]` unless a real
+		// order actually executes (or the position is confirmed dust-close,
+		// both handled explicitly below); otherwise a failed order attempt
+		// would silently mark this fraction "already applied" with no order
+		// ever having moved marginUsd to match.
+		const priorFraction = entry.lastAppliedFraction;
+		const isFirstEverEvaluation = priorFraction == null;
+		const fractionDelta = isFirstEverEvaluation ? clampedFraction : clampedFraction - priorFraction;
+		const targetMarginUsd = isFirstEverEvaluation ? clampedFraction * equity : entry.marginUsd + fractionDelta * equity;
+		// Only a first-ever evaluation commits the baseline unconditionally
+		// (even with no order needed - dust-matches-target on adopt still
+		// starts incremental tracking). An already-tracked position's
+		// pending sub-$1 delta is left uncommitted so it keeps accumulating
+		// across cycles instead of being silently dropped (mirrors
+		// entry.marginUsd itself, only updated once an order executes).
+		const fractionToPersistIfNoOrder = isFirstEverEvaluation ? clampedFraction : priorFraction;
+
 		const deltaMarginUsd = targetMarginUsd - entry.marginUsd;
 		if (Math.abs(deltaMarginUsd) < MIN_ORDER_USD) {
-			state[baseId] = { ...entry, leverage, isBuy };
+			state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 			return; // steady-state common case every cycle; no log spam
 		}
 
@@ -406,7 +444,7 @@ export class PositionSync {
 				// cycle, when targetMarginUsd has drifted further from
 				// entry.marginUsd, instead of hammering the exchange with a
 				// guaranteed-rejected order every poll.
-				state[baseId] = { ...entry, leverage, isBuy };
+				state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 				return;
 			}
 		}
@@ -421,7 +459,7 @@ export class PositionSync {
 		const deltaSize = parseFloat((deltaNotionalUsd / price).toFixed(szDecimals));
 
 		if (deltaSize <= 0) {
-			state[baseId] = { ...entry, leverage, isBuy };
+			state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 			return;
 		}
 
@@ -442,6 +480,7 @@ export class PositionSync {
 				isBuy,
 				leverage,
 				marginUsd: finalMarginUsd,
+				lastAppliedFraction: clampedFraction,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
 				ownerUsername: investment.owner?.username,
@@ -535,6 +574,7 @@ export class PositionSync {
 			isBuy,
 			leverage,
 			marginUsd: finalMarginUsd,
+			lastAppliedFraction: clampedFraction,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,

@@ -76,6 +76,15 @@ export interface PositionState {
 	entryPrice?: number;
 	/** ISO timestamp of when this entry was first opened/adopted. */
 	openedAt?: string;
+	/**
+	 * The risk-clamped trader fraction (0-1) we last sized an order from.
+	 * Lets openOrAdjust tell "the trader's own % actually changed" apart
+	 * from "the user manually resized on the exchange" - only the former
+	 * should drive a new order. Absent on a brand-new/just-adopted entry,
+	 * meaning the next cycle still computes one absolute target (the normal
+	 * open/adopt sizing), then starts tracking incremental changes from there.
+	 */
+	lastAppliedFraction?: number;
 }
 
 /** Full local state, persisted to disk. Keyed by the trader's baseId. */
