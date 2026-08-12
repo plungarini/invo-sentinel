@@ -39,6 +39,8 @@ export default function PositionRow({
 	const liqBarsLit =
 		liqFilledPct == null || liqFilledPct === 0 ? 0 : liqFilledPct >= 66.67 ? 3 : liqFilledPct >= 33.34 ? 2 : 1;
 	const liqBarColor = liqBarsLit === 3 ? "bg-loss" : liqBarsLit === 2 ? "bg-badge-amber" : "bg-text";
+	// A confirmed 0% (not just "no data") reads as a dim teal "all clear" rather than plain grey.
+	const liqBarUnlitColor = liqFilledPct === 0 ? "bg-profit/25" : "bg-text-faint";
 
 	return (
 		<button
@@ -88,7 +90,7 @@ export default function PositionRow({
 					<div className="flex items-center gap-1.5">
 						<div className="flex items-center gap-0.5">
 							{[0, 1, 2].map((i) => (
-								<div key={i} className={`h-3.5 w-1 rounded-full ${i < liqBarsLit ? liqBarColor : "bg-text-faint"}`} />
+								<div key={i} className={`h-3.5 w-1 rounded-full ${i < liqBarsLit ? liqBarColor : liqBarUnlitColor}`} />
 							))}
 						</div>
 						<span className="text-[14px] font-semibold tabular-nums">
