@@ -7,7 +7,6 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import Card from "@/components/shared/Card";
 import BigNumber from "@/components/shared/BigNumber";
 import CycleStatusWidget from "@/components/homepage/CycleStatusWidget";
-import ErrorWarningBanner from "@/components/homepage/ErrorWarningBanner";
 import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
 import AgentKeyExpiryWidget from "@/components/homepage/AgentKeyExpiryWidget";
 import DaemonHealthWidget from "@/components/homepage/DaemonHealthWidget";
@@ -36,8 +35,6 @@ export default function OverviewClient({
 	return (
 		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
 			<div className="flex flex-col gap-4">
-				<ErrorWarningBanner recentErrors={data.recentErrors} />
-
 				{/* Snapshot - the actual "at a glance" overview: balance, open exposure, all-time performance */}
 				<Card>
 					<div className="flex flex-wrap items-end justify-between gap-4">

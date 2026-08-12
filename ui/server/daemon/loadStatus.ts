@@ -9,7 +9,7 @@ import type { StatusResponse } from "@/hooks/useCycleStatus";
 export function loadStatus(): StatusResponse {
 	const trackedState = readTrackedState();
 	const ignoredTrades = readIgnoredTrades();
-	const { cycle, recentErrors, recentActivity } = readLatestCycleStatus();
+	const { cycle, recentActivity } = readLatestCycleStatus();
 
 	let tokenDaysRemaining: number | null = null;
 	try {
@@ -23,7 +23,6 @@ export function loadStatus(): StatusResponse {
 		trackedCount: Object.keys(trackedState).length,
 		ignoredCount: Object.keys(ignoredTrades).length,
 		tokenDaysRemaining,
-		recentErrors,
 		recentActivity,
 	};
 }
