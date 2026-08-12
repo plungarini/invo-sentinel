@@ -115,7 +115,12 @@ async function main() {
 	});
 
 	pingStart(config.healthcheckPingUrl, log);
-	let { followedPortfolioCount } = await reconciler.run();
+	const first = await reconciler.run();
+	// null only when the cycle was skipped for a transient, self-recovering
+	// rate limit (see reconciler.ts) - keep the last known follow count
+	// rather than resetting to 0, which would undo poll-schedule.ts's
+	// throttle right when it's most needed (immediately after a rate limit).
+	let followedPortfolioCount = first.followedPortfolioCount ?? 0;
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 
@@ -131,7 +136,8 @@ async function main() {
 		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {
-			({ followedPortfolioCount } = await reconciler.run());
+			const result = await reconciler.run();
+			if (result.followedPortfolioCount != null) followedPortfolioCount = result.followedPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });

@@ -39,7 +39,7 @@ export class Reconciler {
 		private log: Logger,
 	) {}
 
-	async run(): Promise<{ followedPortfolioCount: number }> {
+	async run(): Promise<{ followedPortfolioCount: number | null }> {
 		// Cheap start/end markers with wall-clock duration - the previous two
 		// live incidents (see INCIDENT_LOG.md) both required attaching a
 		// debugger to a hung process mid-incident to even confirm WHEN a
@@ -50,7 +50,34 @@ export class Reconciler {
 
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
-		const portfolios = await this.poller.fetchFollowedPortfolios();
+
+		let portfolios: FollowedPortfolio[];
+		try {
+			portfolios = await this.poller.fetchFollowedPortfolios();
+		} catch (e: any) {
+			// This is the FIRST Invo call of the cycle - unlike the per-
+			// portfolio investments loop below, nothing here was in a try/
+			// catch at all before, so a RateLimitExhaustedError propagated
+			// all the way out of run() to auto-copy.ts's outer catch, which
+			// calls pingFail() - reporting the daemon as genuinely DOWN to
+			// healthchecks.io for what's actually just a transient, self-
+			// recovering external rate limit the daemon handles gracefully
+			// every other cycle. Confirmed live 2026-08-12: healthchecks.io
+			// flapped up/down every few minutes for ~30min while every
+			// individual reconcile cycle that DID get past this call
+			// completed normally in ~9-10s - the daemon was never actually
+			// down, only this one call was periodically rate-limited.
+			// Returning cleanly here (not throwing) means auto-copy.ts's
+			// main loop calls pingSuccess() same as any other cycle - an
+			// accurate signal, since the process is alive and will retry
+			// immediately next cycle, not stuck or crashed.
+			if (e instanceof RateLimitExhaustedError) {
+				this.log({ type: 'cycle_skipped_rate_limited', reason: e.message });
+				this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt, skipped: true });
+				return { followedPortfolioCount: null };
+			}
+			throw e;
+		}
 		this.log({ type: 'cycle_checkpoint', stage: 'portfolios_fetched', count: portfolios.length });
 		this.followedPortfoliosStore.save(portfolios);
 		const riskEntries = this.portfolioRiskStore.sync(portfolios);
