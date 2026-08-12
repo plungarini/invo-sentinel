@@ -5,6 +5,8 @@ export interface WalletPosition extends HyperliquidPosition {
 	markPx: string | null;
 	/** Decimal hourly rate (e.g. 0.0000125 = 0.00125%/hr), null if HL didn't return one for this coin. */
 	fundingRateHourly: number | null;
+	/** Epoch ms of the most recent real fill on this coin, straight from HL's own fill history - works even when `tracked` is null. */
+	lastFillTimeMs: number | null;
 	tracked: (PositionState & { baseId: string; priceTarget: number | null; stopLoss: number | null }) | null;
 	/** Not managed by this daemon, but uniquely matched to a followed trader's own open investment by coin+direction - trader/TP/SL sourced live from Invo, not local state. */
 	invoMatch: { portfolioTitle: string; ownerUsername?: string; priceTarget: number | null; stopLoss: number | null } | null;
