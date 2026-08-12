@@ -34,8 +34,10 @@ export default function PositionRow({
 
 	const liqPx = position.liquidationPx != null ? parseFloat(position.liquidationPx) : null;
 	const liqFilledPct = computeLiqFilledPct(entryPx, markPx, liqPx);
-	// 3-bar severity gauge: always at least 1 bar lit once there's a real reading, escalating white -> amber -> red.
-	const liqBarsLit = liqFilledPct == null ? 0 : liqFilledPct >= 66.67 ? 3 : liqFilledPct >= 33.34 ? 2 : 1;
+	// 3-bar severity gauge: exactly 0% stays fully unlit (no risk at all), then at least
+	// 1 bar lights as soon as there's any real risk, escalating white -> amber -> red.
+	const liqBarsLit =
+		liqFilledPct == null || liqFilledPct === 0 ? 0 : liqFilledPct >= 66.67 ? 3 : liqFilledPct >= 33.34 ? 2 : 1;
 	const liqBarColor = liqBarsLit === 3 ? "bg-loss" : liqBarsLit === 2 ? "bg-badge-amber" : "bg-text";
 
 	return (
@@ -74,14 +76,14 @@ export default function PositionRow({
 				</div>
 			</div>
 
-			<div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
-				<div className="min-w-0 shrink-0">
+			<div className="mt-3 grid grid-cols-3 items-center gap-3 border-t border-border pt-3">
+				<div className="min-w-0">
 					<p className="text-[12px] text-text-muted">Allocation</p>
 					<p className="truncate text-[14px] font-semibold tabular-nums">
 						{allocationPct != null ? `${formatUsd(initialMarginUsd!)} (${allocationPct.toFixed(2)}%)` : "N/A"}
 					</p>
 				</div>
-				<div className="min-w-0 shrink-0">
+				<div className="min-w-0">
 					<p className="text-[12px] text-text-muted">Liq. Risk</p>
 					<div className="flex items-center gap-1.5">
 						<div className="flex items-center gap-0.5">
@@ -94,7 +96,7 @@ export default function PositionRow({
 						</span>
 					</div>
 				</div>
-				<div className="min-w-0 shrink-0 text-right">
+				<div className="min-w-0 text-right">
 					<p className="text-[12px] text-text-muted">Liq. Price</p>
 					<p className="truncate text-[14px] font-semibold tabular-nums">{liqPx != null ? formatUsd(liqPx) : "N/A"}</p>
 				</div>
