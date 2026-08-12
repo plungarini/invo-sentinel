@@ -6,6 +6,8 @@ import Tabs from "@/components/shared/Tabs";
 import Button from "@/components/shared/Button";
 import BalanceCard from "@/components/wallet/BalanceCard";
 import OpenPositionsTable from "@/components/wallet/OpenPositionsTable";
+import PositionSortChip from "@/components/wallet/PositionSortChip";
+import { usePositionSort } from "@/hooks/usePositionSort";
 import TransfersList from "@/components/wallet/TransfersList";
 import RowSkeleton from "@/components/wallet/RowSkeleton";
 import TradeHistoryTable from "@/components/history/TradeHistoryTable";
@@ -36,6 +38,7 @@ export default function WalletClient({ initialData }: { initialData?: WalletResp
 		if (!visitedTabs.has(t)) setVisitedTabs(new Set(visitedTabs).add(t));
 	};
 
+	const [sort, setSort] = usePositionSort();
 	const { data, error } = useWallet(initialData);
 	// Transfers and history are only fetched once their tab has actually been opened,
 	// and history itself streams in page by page rather than all at once.
@@ -74,14 +77,15 @@ export default function WalletClient({ initialData }: { initialData?: WalletResp
 					accountValueUsd={data.accountValueUsd}
 					feesLabel={feesData != null && feesData.totalFeesUsd > 0 ? `${formatUsd(feesData.totalFeesUsd)} fees` : undefined}
 				/>
-				<div className="pb-4 pt-3">
+				<div className="flex items-center justify-between pb-4 pt-3">
 					<Tabs tabs={TABS} active={tab} onChange={changeTab} />
+					{tab === "Open" && <PositionSortChip sort={sort} onChange={setSort} />}
 				</div>
 			</div>
 
 			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 md:pb-6">
 				{tab === "Open" ? (
-					<OpenPositionsTable positions={data.positions} accountValueUsd={data.accountValueUsd} />
+					<OpenPositionsTable positions={data.positions} accountValueUsd={data.accountValueUsd} sort={sort} />
 				) : tab === "History" ? (
 					historyLoading ? (
 						<RowSkeleton />

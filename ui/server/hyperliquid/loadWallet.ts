@@ -3,6 +3,7 @@ import { readTrackedState } from "../daemon/readState";
 import { getHyperliquidClient } from "./client";
 import { getInvoClient } from "../invo/client";
 import { staleWhileRevalidate } from "../staleWhileRevalidate";
+import { loadLastFillTimes } from "./loadLastFillTimes";
 import type { WalletResponse } from "@/hooks/useWallet";
 
 const CACHE_TTL_MS = 4_000; // just bounds the SSR/API-route path's own staleness; the browser gets fresher pushes over /api/wallet/stream
@@ -13,11 +14,12 @@ export async function fetchWallet(): Promise<WalletResponse> {
 	const trackedState = readTrackedState();
 
 	const liveMids = hl.getLiveMids();
-	const [accountValueUsd, positions, allMids, fundingRates] = await Promise.all([
+	const [accountValueUsd, positions, allMids, fundingRates, lastFillTimes] = await Promise.all([
 		hl.getAccountValueUsd(),
 		hl.getPositions(),
 		liveMids ? Promise.resolve(liveMids) : hl.getAllMids(),
 		hl.getFundingRates().catch(() => ({}) as Record<string, number>),
+		loadLastFillTimes().catch(() => ({}) as Record<string, number>),
 	]);
 
 	const trackedByCoin = new Map(Object.entries(trackedState).map(([baseId, entry]) => [entry.coin, { baseId, ...entry }]));
@@ -87,6 +89,7 @@ export async function fetchWallet(): Promise<WalletResponse> {
 				...p,
 				markPx: allMids[p.coin] ?? null,
 				fundingRateHourly: fundingRates[p.coin] ?? null,
+				lastFillTimeMs: lastFillTimes[p.coin] ?? null,
 				tracked: tracked ? { ...tracked, priceTarget: investment?.priceTarget ?? null, stopLoss: investment?.stopLoss ?? null } : null,
 				invoMatch: invoMatchByCoin.get(p.coin) ?? null,
 			};

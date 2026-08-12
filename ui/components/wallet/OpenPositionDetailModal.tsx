@@ -3,6 +3,7 @@
 import Modal from "@/components/shared/Modal";
 import Badge from "@/components/shared/Badge";
 import { formatPct, formatUsd } from "@/lib/format";
+import { computeLiqFilledPct } from "@/lib/liquidation";
 import type { WalletPosition } from "@/hooks/useWallet";
 
 function DetailRow({ label, value, valueClassName = "", title }: { label: string; value: string; valueClassName?: string; title?: string }) {
@@ -93,14 +94,7 @@ export default function OpenPositionDetailModal({
 	const takeProfitPnlUsd = estimatePnlAt(priceTarget);
 	const stopLossPnlUsd = estimatePnlAt(stopLoss);
 
-	// Distance from entry to liq is fixed; risk is how much of that range is still left
-	// between mark and liq, not how far mark has drifted from entry - a favorable move
-	// increases mark's distance from liq beyond the original range, correctly clamping to 0%
-	// instead of (wrongly) still counting the move as "progress" via an absolute-value diff from entry.
-	const liqRange = entryPx && liqPx != null ? Math.abs(entryPx - liqPx) : null;
-	const liqDistance = markPx != null && liqPx != null ? Math.abs(markPx - liqPx) : null;
-	const liqFilledPct =
-		liqRange && liqRange > 0 && liqDistance != null ? Math.max(0, Math.min(100, (1 - liqDistance / liqRange) * 100)) : null;
+	const liqFilledPct = computeLiqFilledPct(entryPx, markPx, liqPx);
 
 	return (
 		<Modal onClose={onClose} title="Position Details">
