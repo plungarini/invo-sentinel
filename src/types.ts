@@ -105,6 +105,21 @@ export interface IgnoredTradeEntry {
 /** Full local ignore-list, persisted to disk. Keyed by the trader's baseId. */
 export type IgnoredTradesMap = Record<string, IgnoredTradeEntry>;
 
+/** Cached result of decoding a live HL position's cloid for one coin - see cloid-attribution.ts. Keyed by coin so a close+reopen under a new mimic is picked up via the positionSize check, not by baseId (which isn't known until resolved). */
+export type CloidAttributionCacheEntry =
+	| { kind: 'manual'; checkedAt: string; positionSize: string }
+	| {
+			kind: 'resolved';
+			checkedAt: string;
+			positionSize: string;
+			baseShortId: string;
+			investmentBaseId: string;
+			portfolioId: string;
+			trader?: string;
+	  };
+
+export type CloidAttributionCache = Record<string, CloidAttributionCacheEntry>;
+
 export interface RiskConfig {
 	/** Fraction, e.g. 0.02 for 2%. */
 	minMarginPct: number;
@@ -151,6 +166,8 @@ export interface HyperliquidFill {
 	/** USD-denominated, per HL's own fill payload - negative for rebates. */
 	fee?: string;
 	feeToken?: string;
+	/** Client order id - see cloid-codec.ts for Invo's own encoding of this field on mimic-placed orders. Absent/null for most fills (only set when the placing client chose to). */
+	cloid?: string | null;
 	[key: string]: unknown;
 }
 

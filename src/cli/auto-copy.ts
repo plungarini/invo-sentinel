@@ -6,6 +6,8 @@ import { loadConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
+import { CycleFillsCache } from '../services/cycle-fills-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
@@ -78,6 +80,8 @@ async function main() {
 	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), log);
 	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, 'data/.copy-portfolio-risk.json'), log);
 	const followedPortfoliosStore = new FollowedPortfoliosStore(join(ROOT_DIR, 'data/.copy-followed-portfolios.json'), log);
+	const cloidAttributionStore = new CloidAttributionStore(join(ROOT_DIR, 'data/.copy-cloid-cache.json'), log);
+	const cycleFillsCache = new CycleFillsCache(hl);
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -85,16 +89,20 @@ async function main() {
 		staleEntry: config.staleEntry,
 		dryRun,
 		assetMeta: meta.universe,
+		getFillsOnce: () => cycleFillsCache.getOnce(),
 	});
 	const poller = new PortfolioPoller(invo, log);
 	const reconciler = new Reconciler(
 		poller,
 		sync,
 		hl,
+		invo,
 		stateStore,
 		ignoredStore,
 		portfolioRiskStore,
 		followedPortfoliosStore,
+		cloidAttributionStore,
+		cycleFillsCache,
 		config.risk,
 		log,
 	);
@@ -117,10 +125,11 @@ async function main() {
 	pingStart(config.healthcheckPingUrl, log);
 	const first = await reconciler.run();
 	// null only when the cycle was skipped for a transient, self-recovering
-	// rate limit (see reconciler.ts) - keep the last known follow count
-	// rather than resetting to 0, which would undo poll-schedule.ts's
-	// throttle right when it's most needed (immediately after a rate limit).
+	// rate limit (see reconciler.ts) - keep the last known counts rather
+	// than resetting to 0, which would undo poll-schedule.ts's throttle
+	// right when it's most needed (immediately after a rate limit).
 	let followedPortfolioCount = first.followedPortfolioCount ?? 0;
+	let adHocPortfolioCount = first.adHocPortfolioCount ?? 0;
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 
@@ -129,15 +138,17 @@ async function main() {
 		// that the configured pollIntervalMs alone would exceed Invo's own
 		// Cloudflare rate limit (500 req/300s per IP, confirmed live
 		// 2026-08-11) - see poll-schedule.ts. A no-op at typical follow counts.
-		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs);
+		const extraCallsPerCycle = adHocPortfolioCount; // one get_investments per ad-hoc (manually-mimicked) portfolio
+		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
 		if (delayMs > config.pollIntervalMs) {
-			log({ type: 'poll_interval_throttled', followedPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
+			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
 		}
 		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {
 			const result = await reconciler.run();
 			if (result.followedPortfolioCount != null) followedPortfolioCount = result.followedPortfolioCount;
+			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });

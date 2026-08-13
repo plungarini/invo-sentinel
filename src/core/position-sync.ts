@@ -4,8 +4,8 @@ import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
-import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
-import { resolveMimickedCandidate } from './mimic-resolver.js';
+import type { HyperliquidFill, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
+import { resolveConflictByCloid } from './cloid-attribution.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
 const HL_MIN_NOTIONAL_USD = 10; // exchange-enforced floor; below this HL rejects the order outright
@@ -25,6 +25,8 @@ export interface PositionSyncOptions {
 	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
+	/** Memoized per-cycle - conflicts are rare, so this only actually calls HL when one occurs, and at most once per cycle regardless of how many. */
+	getFillsOnce: () => Promise<HyperliquidFill[]>;
 }
 
 /**
@@ -66,7 +68,7 @@ export class PositionSync {
 		ignored: IgnoredTradesMap,
 		risk: RiskConfig,
 	): Promise<void> {
-		const { log, staleEntry, dryRun, hl, invo } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo, getFillsOnce } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
@@ -239,9 +241,9 @@ export class PositionSync {
 		// other baseId may still be the right one this cycle). Right
 		// direction, and no other followed trader shares both this coin and
 		// this direction → unambiguous, auto-adopt immediately. Right
-		// direction, but another followed trader shares it too → ask Invo's
-		// own mimic-tracking (mimic-resolver.ts) which trade you actually
-		// mimicked, instead of guessing. Only flag it if that's inconclusive.
+		// direction, but another followed trader shares it too → decode the
+		// position's own order cloid (cloid-attribution.ts) to know exactly
+		// which one, instead of guessing. Only flag it if that's inconclusive.
 		if (!entry.ourBaseShortId) {
 			const livePositions = await hl.getPositions();
 			const existing = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
@@ -266,17 +268,18 @@ export class PositionSync {
 				let adopt = sameDirectionRivals.length === 0;
 
 				if (!adopt) {
-					const resolution = await resolveMimickedCandidate(invo, [investment, ...sameDirectionRivals]);
-					if (resolution.resolvedBaseId === baseId) {
+					const fills = await getFillsOnce();
+					const resolvedBaseId = resolveConflictByCloid(fills, coin, [investment, ...sameDirectionRivals]);
+					if (resolvedBaseId === baseId) {
 						adopt = true;
-						log({ type: 'conflict_resolved', baseId, coin, reason: resolution.reason });
-					} else if (resolution.resolvedBaseId) {
+						log({ type: 'conflict_resolved_by_cloid', baseId, coin });
+					} else if (resolvedBaseId) {
 						log({
 							type: 'skip',
-							reason: 'Invo mimic-tracking confirms a different baseId owns this position',
+							reason: "this wallet's own order cloid decodes to a different baseId owning this position",
 							baseId,
 							coin,
-							resolvedBaseId: resolution.resolvedBaseId,
+							resolvedBaseId,
 						});
 						return;
 					} else {
@@ -285,7 +288,7 @@ export class PositionSync {
 							ignored[baseId] = {
 								coin,
 								portfolioId: investment.portfolio?.id,
-								reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and mimic-tracking couldn't confirm it owns this coin; permanently ignored regardless of PnL`,
+								reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and cloid decoding couldn't confirm it owns this coin; permanently ignored regardless of PnL`,
 								ignoredAt: new Date().toISOString(),
 							};
 							log({
@@ -302,7 +305,8 @@ export class PositionSync {
 						}
 						log({
 							type: 'existing_position_conflict',
-							reason: `multiple followed traders hold this coin in the same direction and mimic-tracking couldn't confirm one (${resolution.reason})`,
+							reason:
+								"multiple followed traders hold this coin in the same direction and this wallet's own order cloid could not confirm which one (no decodable Invo cloid on any recent fill for this coin)",
 							baseId,
 							coin,
 							trader: investment.owner?.username,
