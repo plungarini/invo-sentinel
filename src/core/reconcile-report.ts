@@ -83,19 +83,22 @@ export function buildReconcileReport(args: ReconcileReportArgs): ReconcileReport
 		for (const inv of openInvestments) {
 			const tracked = !!state[inv.baseId];
 			const isIgnored = !!ignored[inv.baseId];
-			const hasConflictLog = (eventsByBaseId.get(inv.baseId) ?? []).some(
-				(e) => e.type === 'existing_position_conflict',
-			);
-			if (!tracked && !isIgnored && !hasConflictLog) {
-				issues.push({
-					type: 'unexplained_untracked_open',
-					baseId: inv.baseId,
-					coin: inv.ticker,
-					trader: inv.owner?.username,
-					createdAt: inv.createdAt,
-					detail: 'open on trader side, not tracked, not ignored, no conflict log explains it',
-				});
-			}
+			const baseEventTypes = new Set((eventsByBaseId.get(inv.baseId) ?? []).map((e) => e.type));
+			const hasConflictLog = baseEventTypes.has('existing_position_conflict');
+			// Deliberately temporary (stale-entry-policy.ts) - never written to
+			// IgnoredTradesMap by design, since it's re-evaluated fresh every
+			// cycle, so it can't show up as `isIgnored` above; still a fully
+			// explained, intentional non-action, not an unexplained gap.
+			const hasFreshProfitSkipLog = baseEventTypes.has('fresh_entry_profit_skip');
+			if (tracked || isIgnored || hasConflictLog || hasFreshProfitSkipLog) continue;
+			issues.push({
+				type: 'unexplained_untracked_open',
+				baseId: inv.baseId,
+				coin: inv.ticker,
+				trader: inv.owner?.username,
+				createdAt: inv.createdAt,
+				detail: 'open on trader side, not tracked, not ignored, no conflict log explains it',
+			});
 		}
 
 		// Close-side: every recently-closed investment we were ever tracking should have a corresponding close.
@@ -109,6 +112,25 @@ export function buildReconcileReport(args: ReconcileReportArgs): ReconcileReport
 
 			const closeEvent = baseEvents.find((e) => e.type === 'closed');
 			const skipCloseEvent = baseEvents.find((e) => e.type === 'skip_close');
+			const manualCloseDetectedEvent = baseEvents.find((e) => e.type === 'manual_close_detected');
+
+			if (!closeEvent && manualCloseDetectedEvent) {
+				// openOrAdjust's own live-position resync check (position-sync.ts)
+				// found the real HL position already gone, on a cycle before this
+				// daemon's own close-detection loop ever ran for it - same
+				// externally-closed fact as the branch below, just caught via a
+				// different code path, so it's not a real missed close.
+				issues.push({
+					type: 'position_closed_externally',
+					severity: 'warn',
+					baseId: inv.baseId,
+					coin: inv.ticker,
+					trader: inv.owner?.username,
+					detail: "detected via openOrAdjust's own live-position resync check (manual_close_detected), before this daemon's trader-side close-detection loop ran - not a missed close",
+					detectedAt: manualCloseDetectedEvent.ts,
+				});
+				continue;
+			}
 			if (!closeEvent && skipCloseEvent) {
 				// Two different explanations produce this same signature
 				// (tracked it, later found nothing real to close) - distinguish
