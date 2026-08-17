@@ -203,6 +203,32 @@ export interface ClosedInvestment extends OpenInvestment {
 }
 
 /**
+ * Durable record of one fully-closed mirrored trade, persisted to
+ * `closed_trades` in `sentinel.db` - the one history table that survives
+ * both a position closing (PositionState is deleted from `position_state`
+ * at that point) and its portfolio later being unfollowed (which stops
+ * tracking but never touches this record). `portfolioTitle` is a snapshot
+ * taken at close time specifically so portfolio-level analytics still work
+ * after an unfollow, when the live followed-portfolios list no longer has
+ * that title to offer.
+ */
+export interface ClosedTradeRecord {
+	baseId: string;
+	coin: string;
+	isBuy: boolean;
+	leverage?: number;
+	marginUsd?: number;
+	portfolioId?: string;
+	portfolioTitle?: string;
+	ownerUsername?: string;
+	entryPrice?: number;
+	closingPrice?: number;
+	openedAt?: string;
+	closedAt: string;
+	closeReason: string;
+}
+
+/**
  * One followed portfolio's margin-band override, persisted to
  * `.copy-portfolio-risk.json`. `title`/`ownerUsername` are display-only,
  * kept fresh automatically, never used for logic. `minMarginPct`/

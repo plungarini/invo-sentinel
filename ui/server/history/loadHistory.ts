@@ -2,6 +2,7 @@ import "server-only";
 import type { ClosedInvestment } from "@daemon/types.js";
 import { readTrackedState } from "../daemon/readState";
 import { readIgnoredTrades } from "../daemon/readIgnored";
+import { readClosedTrades } from "../daemon/readClosedTrades";
 import { readLogEvents } from "../daemon/readLogs";
 import { getInvoClient } from "../invo/client";
 import { getHyperliquidClient } from "../hyperliquid/client";
@@ -20,14 +21,16 @@ async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
 	// with the (slower) Invo followed-portfolios call, instead of after it.
 	const hlUserFillsPromise = hlClientPromise.then((hl) => hl.getUserFills().catch(() => []));
 
-	const [, state, ignored, logEvents, portfolios, hlUserFills] = await Promise.all([
+	const [, state, ignored, closedTrades, logEvents, portfolios, hlUserFills] = await Promise.all([
 		hlClientPromise,
 		Promise.resolve(readTrackedState()),
 		Promise.resolve(readIgnoredTrades()),
+		Promise.resolve(readClosedTrades()),
 		Promise.resolve(readLogEvents(Date.now() - HISTORY_WINDOW_MS)),
 		invo.getFollowedPortfolios(),
 		hlUserFillsPromise,
 	]);
+	const closedTradesByBaseId = new Map(closedTrades.map((t) => [t.baseId, t]));
 
 	// Deliberately no per-portfolio getOpenInvestments/getClosedInvestments
 	// fetch here - see buildTradeHistory's GENERIC_CLOSE_REASON doc. Those
@@ -41,7 +44,7 @@ async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
 	// to need it. loadHistoryPage below fetches this per-portfolio fallback
 	// lazily, only for the specific handful of portfolios a given page's
 	// GENERIC_CLOSE_REASON entries actually need.
-	const trades = buildTradeHistory({ state, ignored, logEvents, portfolios, hlUserFills });
+	const trades = buildTradeHistory({ state, ignored, logEvents, portfolios, hlUserFills, closedTradesByBaseId });
 
 	return { trades };
 }

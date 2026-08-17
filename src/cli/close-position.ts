@@ -1,7 +1,8 @@
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { HyperliquidClient, orderFillError } from '../clients/hyperliquid-client.js';
+import { HyperliquidClient, extractAvgFillPrice, orderFillError } from '../clients/hyperliquid-client.js';
 import { loadConfig } from '../config/env.js';
+import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { createLogger } from '../services/logger.js';
 import { StateStore } from '../services/state-store.js';
 
@@ -50,10 +51,29 @@ async function main() {
 		process.exit(1);
 	}
 
-	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
+	const stateStore = new StateStore(join(ROOT_DIR, 'data/sentinel.db'), log);
+	const closedTradesStore = new ClosedTradesStore(join(ROOT_DIR, 'data/sentinel.db'), log);
 	const state = stateStore.load();
 	const clearedBaseIds = Object.keys(state).filter((baseId) => state[baseId].coin === coin);
-	for (const baseId of clearedBaseIds) delete state[baseId];
+	const closingPrice = extractAvgFillPrice(closeResult);
+	for (const baseId of clearedBaseIds) {
+		const entry = state[baseId];
+		closedTradesStore.record({
+			baseId,
+			coin: entry.coin,
+			isBuy: entry.isBuy,
+			leverage: entry.leverage,
+			marginUsd: entry.marginUsd,
+			portfolioId: entry.portfolioId,
+			ownerUsername: entry.ownerUsername,
+			entryPrice: entry.entryPrice,
+			closingPrice: closingPrice ?? undefined,
+			openedAt: entry.openedAt,
+			closedAt: new Date().toISOString(),
+			closeReason: 'manual_close',
+		});
+		delete state[baseId];
+	}
 	if (clearedBaseIds.length > 0) stateStore.save(state);
 
 	const result = { status: 'closed', coin, qtyBefore, hlResult: closeResult, clearedBaseIds };

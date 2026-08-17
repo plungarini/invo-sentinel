@@ -1,7 +1,7 @@
 import type { PositionStateMap } from "@daemon/types.js";
 import { StateStore } from "@daemon/services/state-store.js";
-import { STATE_PATH } from "./paths.js";
+import { DB_PATH } from "./paths.js";
 
 export function readTrackedState(): PositionStateMap {
-	return new StateStore(STATE_PATH, () => {}).load();
+	return new StateStore(DB_PATH, () => {}).load();
 }
