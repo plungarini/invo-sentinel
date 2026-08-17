@@ -34,16 +34,21 @@ export function aggregateAnalytics(trades: TradeHistoryEntry[]): AnalyticsSummar
 	const determinedPercents = determined.map((t) => t.pnlPercent).filter(isNumber);
 	const avgPnlPercent = avg(determinedPercents);
 
-	const groups = new Map<string, (TradeHistoryEntry & { pnlUsd: number })[]>();
+	// Keyed by portfolioId, not portfolioTitle - two portfolios (even from
+	// different traders) can share a display title, and that must not merge
+	// their PnL. Falls back to title/trader only when a trade has no known
+	// portfolio identity at all (older exchange-only reconstructions).
+	const groups = new Map<string, { name: string; trades: (TradeHistoryEntry & { pnlUsd: number })[] }>();
 	for (const t of determined) {
-		const key = t.portfolioTitle ?? t.trader ?? "Unattributed (exchange-only)";
-		const list = groups.get(key) ?? [];
-		list.push(t);
-		groups.set(key, list);
+		const name = t.portfolioTitle ?? t.trader ?? "Unattributed (exchange-only)";
+		const key = t.portfolioId ?? name;
+		const entry = groups.get(key);
+		if (entry) entry.trades.push(t);
+		else groups.set(key, { name, trades: [t] });
 	}
 
-	const perPortfolio: PortfolioPnlBreakdown[] = [...groups.entries()]
-		.map(([name, group]): PortfolioPnlBreakdown => {
+	const perPortfolio: PortfolioPnlBreakdown[] = [...groups.values()]
+		.map(({ name, trades: group }): PortfolioPnlBreakdown => {
 			const groupWins = group.filter((t) => t.pnlUsd > 0).length;
 			const groupPercents = group.map((t) => t.pnlPercent).filter(isNumber);
 			return {
