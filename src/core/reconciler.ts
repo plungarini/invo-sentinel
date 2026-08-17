@@ -231,7 +231,7 @@ export class Reconciler {
 				? new Set(Object.entries(state).filter(([, s]) => s.portfolioId === portfolioId).map(([baseId]) => baseId))
 				: null;
 
-			await this.processPortfolioInvestments(portfolioId, investments, risk, state, investmentsByCoin, ignored, allowedBaseIds);
+			await this.processPortfolioInvestments(portfolioId, title, investments, risk, state, investmentsByCoin, ignored, allowedBaseIds);
 		}
 
 		// Never blocks the rest of the cycle on failure - same as every other
@@ -291,9 +291,10 @@ export class Reconciler {
 		return { followedPortfolioCount: portfolios.length, adHocPortfolioCount: adHocPortfolioIds.size };
 	}
 
-	/** Shared by followed and ad-hoc portfolios. `allowedBaseIds` null = act on every investment (followed); a Set restricts to those baseIds only (ad-hoc). */
+	/** Shared by followed and ad-hoc portfolios. `allowedBaseIds` null = act on every investment (followed); a Set restricts to those baseIds only (ad-hoc). `portfolioTitle` is passed through to `sync.close` purely as a point-in-time snapshot for the durable closed-trade record. */
 	private async processPortfolioInvestments(
 		portfolioId: string,
+		portfolioTitle: string | undefined,
 		investments: OpenInvestment[],
 		risk: RiskConfig,
 		state: PositionStateMap,
@@ -326,7 +327,7 @@ export class Reconciler {
 			if (entry.portfolioId !== portfolioId) continue;
 			if (openBaseIds.has(baseId)) continue;
 			try {
-				await this.sync.close(baseId, state);
+				await this.sync.close(baseId, state, portfolioTitle);
 			} catch (e: any) {
 				this.log({ type: 'error', source: 'close', baseId, coin: entry.coin, message: e.message });
 			}

@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'crypto';
 import { extractAvgFillPrice, orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
+import type { ClosedTradesStore } from '../services/closed-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
@@ -27,6 +28,8 @@ export interface PositionSyncOptions {
 	assetMeta: AssetMeta[];
 	/** Memoized per-cycle - conflicts are rare, so this only actually calls HL when one occurs, and at most once per cycle regardless of how many. */
 	getFillsOnce: () => Promise<HyperliquidFill[]>;
+	/** Durable closed-trade history - written once per real close, so portfolio-level analytics survive both the close and a later unfollow. */
+	closedTrades: ClosedTradesStore;
 }
 
 /**
@@ -183,6 +186,20 @@ export class PositionSync {
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
+				this.opts.closedTrades.record({
+					baseId,
+					coin,
+					isBuy: entry.isBuy,
+					leverage: entry.leverage,
+					marginUsd: entry.marginUsd,
+					portfolioId: entry.portfolioId,
+					portfolioTitle: investment.portfolio?.title,
+					ownerUsername: entry.ownerUsername,
+					entryPrice: entry.entryPrice,
+					openedAt: entry.openedAt,
+					closedAt: new Date().toISOString(),
+					closeReason: 'manual_close_detected',
+				});
 				log({
 					type: 'manual_close_detected',
 					baseId,
@@ -201,6 +218,20 @@ export class PositionSync {
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
+				this.opts.closedTrades.record({
+					baseId,
+					coin,
+					isBuy: entry.isBuy,
+					leverage: entry.leverage,
+					marginUsd: entry.marginUsd,
+					portfolioId: entry.portfolioId,
+					portfolioTitle: investment.portfolio?.title,
+					ownerUsername: entry.ownerUsername,
+					entryPrice: entry.entryPrice,
+					openedAt: entry.openedAt,
+					closedAt: new Date().toISOString(),
+					closeReason: 'manual_direction_change_detected',
+				});
 				log({
 					type: 'manual_direction_change_detected',
 					baseId,
@@ -605,16 +636,34 @@ export class PositionSync {
 		});
 	}
 
-	/** Fully mirrors a close; always, never clamped. */
-	async close(baseId: string, state: PositionStateMap): Promise<void> {
-		const { log, dryRun, hl, invo } = this.opts;
+	/** Fully mirrors a close; always, never clamped. `portfolioTitle` is a point-in-time snapshot for the durable closed-trade record - state itself never stores it, only `portfolioId`. */
+	async close(baseId: string, state: PositionStateMap, portfolioTitle?: string): Promise<void> {
+		const { log, dryRun, hl, invo, closedTrades } = this.opts;
 		const entry = state[baseId];
 		if (!entry) return; // caller already knows it's tracked; defensive only
+
+		const recordClosedTrade = (closingPrice: number | null, closeReason: string) =>
+			closedTrades.record({
+				baseId,
+				coin: entry.coin,
+				isBuy: entry.isBuy,
+				leverage: entry.leverage,
+				marginUsd: entry.marginUsd,
+				portfolioId: entry.portfolioId,
+				portfolioTitle,
+				ownerUsername: entry.ownerUsername,
+				entryPrice: entry.entryPrice,
+				closingPrice: closingPrice ?? undefined,
+				openedAt: entry.openedAt,
+				closedAt: new Date().toISOString(),
+				closeReason,
+			});
 
 		const positions = await hl.getPositions();
 		const pos = positions.find((p) => p.coin === entry.coin);
 		if (!pos) {
 			log({ type: 'skip_close', reason: 'no open HL position for this coin', baseId, coin: entry.coin });
+			recordClosedTrade(null, 'skip_close_no_real_position');
 			delete state[baseId];
 			return;
 		}
@@ -660,6 +709,7 @@ export class PositionSync {
 			hlResult: closeResult,
 			invoResult,
 		});
+		recordClosedTrade(extractAvgFillPrice(closeResult), 'closed');
 		delete state[baseId];
 	}
 }

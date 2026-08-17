@@ -7,6 +7,7 @@ import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
 import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
+import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { CycleFillsCache } from '../services/cycle-fills-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
@@ -76,11 +77,16 @@ async function main() {
 	await hl.connect();
 
 	const meta = await hl.getMeta();
-	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
-	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), log);
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const stateStore = new StateStore(dbPath, log);
+	const ignoredStore = new IgnoredTradesStore(dbPath, log);
+	// Deliberately still JSON, not SQLite - the one user-hand-edited store
+	// (see portfolio-risk-store.ts); keeping it a plain file means the user
+	// can open and edit it directly, same as today.
 	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, 'data/.copy-portfolio-risk.json'), log);
-	const followedPortfoliosStore = new FollowedPortfoliosStore(join(ROOT_DIR, 'data/.copy-followed-portfolios.json'), log);
-	const cloidAttributionStore = new CloidAttributionStore(join(ROOT_DIR, 'data/.copy-cloid-cache.json'), log);
+	const followedPortfoliosStore = new FollowedPortfoliosStore(dbPath, log);
+	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
+	const closedTradesStore = new ClosedTradesStore(dbPath, log);
 	const cycleFillsCache = new CycleFillsCache(hl);
 	const sync = new PositionSync({
 		hl,
@@ -90,6 +96,7 @@ async function main() {
 		dryRun,
 		assetMeta: meta.universe,
 		getFillsOnce: () => cycleFillsCache.getOnce(),
+		closedTrades: closedTradesStore,
 	});
 	const poller = new PortfolioPoller(invo, log);
 	const reconciler = new Reconciler(
