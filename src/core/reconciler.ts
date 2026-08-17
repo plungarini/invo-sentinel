@@ -234,7 +234,19 @@ export class Reconciler {
 			await this.processPortfolioInvestments(portfolioId, investments, risk, state, investmentsByCoin, ignored, allowedBaseIds);
 		}
 
-		await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds);
+		// Never blocks the rest of the cycle on failure - same as every other
+		// HL/Invo call in this file, but this one's own hl.getPositions() at
+		// the top isn't behind any of the existing per-portfolio/per-
+		// investment try/catches, so it needs its own (confirmed live
+		// 2026-08-15: an HL API blip here propagated all the way out of
+		// run() to auto-copy.ts's outer catch, which calls pingFail() -
+		// reporting the daemon as down for what should have been a
+		// transient, gracefully-tolerated hiccup like any other).
+		try {
+			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds);
+		} catch (e: any) {
+			this.log({ type: 'error', source: 'cloid_attribution_discovery', message: e.message });
+		}
 		this.cloidAttributionStore.save(cloidCache);
 
 		// A whole portfolio going unfollowed (not just one investment
