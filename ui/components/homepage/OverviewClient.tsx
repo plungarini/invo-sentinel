@@ -26,7 +26,7 @@ export default function OverviewClient({
 }) {
 	const { data, error } = useCycleStatus(initialStatus);
 	const { data: wallet } = useWallet(initialWallet);
-	const { data: analytics } = useAnalytics(initialAnalytics);
+	const { data: analytics } = useAnalytics("all", initialAnalytics);
 
 	if (!data) {
 		return <p className="px-1 text-[15px] text-text-muted">{error ? "Failed to load status." : "Loading…"}</p>;
