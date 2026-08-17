@@ -1,10 +1,14 @@
 const CLOID_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
 function base62Encode(n: bigint): string {
-	if (n === 0n) return CLOID_ALPHABET[0];
+	// BigInt(0) not `0n` - the UI's Next.js build type-checks this file too
+	// (see ui/tsconfig.json's `@daemon/*` path) at an ES2017 target, which
+	// rejects BigInt literal syntax outright even though BigInt itself works
+	// fine at runtime there.
+	if (n === BigInt(0)) return CLOID_ALPHABET[0];
 	let s = '';
 	const base = BigInt(CLOID_ALPHABET.length);
-	while (n > 0n) {
+	while (n > BigInt(0)) {
 		s = CLOID_ALPHABET[Number(n % base)] + s;
 		n /= base;
 	}
