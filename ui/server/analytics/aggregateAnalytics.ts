@@ -19,8 +19,11 @@ function avg(nums: number[]): number {
  * `pnlPercent`, only known when margin/leverage was attributable to a
  * tracked baseId - the two are aggregated separately so a real close with
  * unknown margin still counts toward $ PnL instead of being dropped entirely.
+ * `openPnlUsd` (currently-open positions' unrealized PnL) is passed in rather
+ * than fetched here, since it's a live exchange snapshot, not something
+ * derivable from closed-trade history.
  */
-export function aggregateAnalytics(trades: TradeHistoryEntry[]): AnalyticsSummary {
+export function aggregateAnalytics(trades: TradeHistoryEntry[], openPnlUsd = 0): AnalyticsSummary {
 	const closed = trades.filter((t) => t.status === "closed");
 	const determined = closed.filter(hasPnlUsd);
 
@@ -108,6 +111,7 @@ export function aggregateAnalytics(trades: TradeHistoryEntry[]): AnalyticsSummar
 		determinedPnlTradeCount: determined.length,
 		determinedPnlPercentTradeCount: determinedPercents.length,
 		totalPnlUsd,
+		openPnlUsd,
 		totalFeesUsd,
 		winRate,
 		avgPnlPercent,
