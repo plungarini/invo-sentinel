@@ -1,5 +1,6 @@
 import type {
 	ClosedInvestment,
+	ClosedTradeRecord,
 	HyperliquidFill,
 	IgnoredTradesMap,
 	OpenInvestment,
@@ -31,6 +32,16 @@ export interface BuildTradeHistoryArgs {
 	invoOpenInvestmentsByPortfolio?: Map<string, OpenInvestment[]>;
 	invoClosedInvestmentsByPortfolio?: Map<string, ClosedInvestment[]>;
 	hlUserFills: HyperliquidFill[];
+	/**
+	 * Durable closed-trade rows from `closed_trades` (sentinel.db), keyed by
+	 * baseId - the ONE source here that survives both the close itself
+	 * (state is deleted at that point) and the portfolio later being
+	 * unfollowed (portfolioTitle is a snapshot taken at close time, so it's
+	 * still known even once the live followed-portfolios list drops it).
+	 * Takes precedence over log/fill reconstruction for the fields it
+	 * carries; absent entirely for closes that predate this store.
+	 */
+	closedTradesByBaseId?: Map<string, ClosedTradeRecord>;
 }
 
 /** Sentinel closeReason meaning "no local or exchange-derived reason was known" - the signal that a targeted enrichment fetch (see loadHistory.ts) could still fill this in from Invo's own closed-investment record. */
@@ -57,6 +68,7 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 		invoOpenInvestmentsByPortfolio = new Map(),
 		invoClosedInvestmentsByPortfolio = new Map(),
 		hlUserFills,
+		closedTradesByBaseId = new Map(),
 	} = args;
 
 	const eventsByBaseId = new Map<string, Record<string, unknown>[]>();
@@ -127,24 +139,32 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 		const baseEvents = eventsByBaseId.get(baseId) ?? [];
 		const openInv = openByBaseId.get(baseId);
 		const closedInv = closedByBaseId.get(baseId);
+		// The one source that survives both the close (state is deleted at
+		// that point) and the portfolio later being unfollowed - see
+		// closedTradesByBaseId's doc on BuildTradeHistoryArgs. Only relevant
+		// once already closed; an open trade's own live state is authoritative.
+		const durable = !stateEntry ? closedTradesByBaseId.get(baseId) : undefined;
 
 		const isOpen = !!stateEntry;
 		const status: "open" | "closed" = isOpen ? "open" : "closed";
 
-		const coin = stateEntry?.coin ?? openInv?.ticker ?? closedInv?.ticker ?? findField<string>(baseEvents, "coin");
+		const coin = stateEntry?.coin ?? durable?.coin ?? openInv?.ticker ?? closedInv?.ticker ?? findField<string>(baseEvents, "coin");
 		if (!coin) continue; // no coin known from any source - nothing usable to show
 
-		const isBuy = deriveIsBuy(stateEntry, baseEvents, openInv, closedInv);
-		const trader = stateEntry?.ownerUsername ?? openInv?.owner?.username ?? closedInv?.owner?.username ?? findField<string>(baseEvents, "trader");
-		const portfolioId = stateEntry?.portfolioId ?? openInv?.portfolio?.id ?? closedInv?.portfolio?.id;
-		const portfolioTitle = portfolioId ? portfolioTitleById.get(portfolioId) : undefined;
+		const isBuy = stateEntry ? stateEntry.isBuy : (durable?.isBuy ?? deriveIsBuy(stateEntry, baseEvents, openInv, closedInv));
+		const trader = stateEntry?.ownerUsername ?? durable?.ownerUsername ?? openInv?.owner?.username ?? closedInv?.owner?.username ?? findField<string>(baseEvents, "trader");
+		const portfolioId = stateEntry?.portfolioId ?? durable?.portfolioId ?? openInv?.portfolio?.id ?? closedInv?.portfolio?.id;
+		const portfolioTitle = (portfolioId ? portfolioTitleById.get(portfolioId) : undefined) ?? durable?.portfolioTitle;
 
 		const openedEvent = baseEvents.find((e) => e.type === "opened" || e.type === "auto_adopted");
-		const openedAt = stateEntry?.openedAt ?? (openedEvent?.ts as string | undefined);
+		const openedAt = stateEntry?.openedAt ?? durable?.openedAt ?? (openedEvent?.ts as string | undefined);
 
-		let leverage = stateEntry?.leverage ?? findLastField<number>(baseEvents, ["opened", "increased", "reduced", "dry_run_open", "dry_run_increase", "dry_run_reduce"], "leverage");
-		let entryPrice = stateEntry?.entryPrice;
-		const marginUsd = isOpen ? stateEntry.marginUsd : deriveLastKnownMarginUsd(baseEvents);
+		let leverage =
+			stateEntry?.leverage ??
+			durable?.leverage ??
+			findLastField<number>(baseEvents, ["opened", "increased", "reduced", "dry_run_open", "dry_run_increase", "dry_run_reduce"], "leverage");
+		let entryPrice = stateEntry?.entryPrice ?? durable?.entryPrice;
+		const marginUsd = isOpen ? stateEntry.marginUsd : (durable?.marginUsd ?? deriveLastKnownMarginUsd(baseEvents));
 
 		const lifecycle: TradeLifecycleEvent[] = baseEvents.map((e) => ({
 			ts: e.ts as string,
@@ -164,9 +184,17 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 			const closeEvent = baseEvents.find((e) => e.type === "closed");
 			const manualDetectedEvent = baseEvents.find((e) => (e.type as string) in MANUAL_CLOSE_DETECTED_REASONS);
 
-			closedAt = (closeEvent?.ts as string) ?? (manualDetectedEvent?.ts as string) ?? closedInv?.closedAt ?? undefined;
+			closedAt = durable?.closedAt ?? (closeEvent?.ts as string) ?? (manualDetectedEvent?.ts as string) ?? closedInv?.closedAt ?? undefined;
+			closingPrice = durable?.closingPrice;
 
-			if (manualDetectedEvent) {
+			if (durable) {
+				// durable.closeReason is one of this daemon's own internal codes
+				// (see position-sync.ts's `recordClosedTrade`/close-position.ts),
+				// not a display string - map the manual ones to the same labels
+				// the log-derived path below would have used; a plain "closed"
+				// still prefers Invo's own reasonClosed when known.
+				closeReason = MANUAL_CLOSE_DETECTED_REASONS[durable.closeReason] ?? closedInv?.reasonClosed ?? (durable.closeReason === "closed" ? "trader closed" : durable.closeReason);
+			} else if (manualDetectedEvent) {
 				closeReason = MANUAL_CLOSE_DETECTED_REASONS[manualDetectedEvent.type as string];
 			} else if (closedInv?.reasonClosed) {
 				closeReason = closedInv.reasonClosed;
@@ -185,7 +213,7 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 				feesUsd = trade.feesUsd;
 				closedAt = closedAt ?? trade.closedAt; // ground-truth timestamp when we had none locally
 				entryPrice = entryPrice ?? trade.entryPrice;
-				closingPrice = trade.closingPrice;
+				closingPrice = closingPrice ?? trade.closingPrice;
 				// Prefer real margin-based ROI when known (leveraged return on what was
 				// actually put at risk). When margin/leverage is unknown - the common case
 				// for exchange-only reconstructed closes - fall back to return-on-notional
