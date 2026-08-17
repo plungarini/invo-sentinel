@@ -37,7 +37,7 @@ export default function TransfersList({ transfers }: { transfers: HyperliquidLed
 		<div className="flex flex-col gap-2.5">
 			{transfers.map((t) => {
 				const type = t.delta.type;
-				const amount = t.delta.usdcValue ?? t.delta.amount;
+				const amount = t.delta.usdcValue ?? t.delta.amount ?? t.delta.usdc;
 				const parsedAmount = amount != null ? parseFloat(amount) : null;
 
 				// Sign of the actual value is ground truth for direction - the

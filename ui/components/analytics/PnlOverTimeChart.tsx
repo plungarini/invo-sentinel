@@ -90,7 +90,7 @@ function buildTransferMarkers(pnlOverTime: PnlOverTimePoint[], transfers: Hyperl
 
 	const markers = new Map<string, TransferMarker>();
 	for (const t of transfers) {
-		const amount = t.delta.usdcValue ?? t.delta.amount;
+		const amount = t.delta.usdcValue ?? t.delta.amount ?? t.delta.usdc;
 		const parsed = amount != null ? parseFloat(amount) : null;
 		if (parsed == null || parsed === 0) continue;
 

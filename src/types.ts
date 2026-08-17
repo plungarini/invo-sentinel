@@ -176,13 +176,16 @@ export interface HyperliquidFill {
  * withdrawals, and internal transfers, independent of trading activity.
  * `delta.type` is HL's own classification (e.g. 'deposit', 'withdraw',
  * 'send', 'receive', 'accountClassTransfer'); shape otherwise varies by
- * type, so most fields beyond `type`/`usdcValue` are left as unknown.
+ * type - a 'deposit'/'withdraw' carries its amount in `usdc`, while a spot
+ * transfer ('send'/'receive') carries it in `usdcValue`/`amount` instead -
+ * so most fields beyond `type` are left as unknown.
  */
 export interface HyperliquidLedgerUpdate {
 	time: number;
 	hash: string;
 	delta: {
 		type: string;
+		usdc?: string;
 		usdcValue?: string;
 		amount?: string;
 		token?: string;
