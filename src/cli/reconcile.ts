@@ -64,8 +64,9 @@ async function main() {
 	const hl = new HyperliquidClient(config.hlAgentKey, config.walletAddress);
 	await hl.connect();
 
-	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), () => {});
-	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), () => {});
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const stateStore = new StateStore(dbPath, () => {});
+	const ignoredStore = new IgnoredTradesStore(dbPath, () => {});
 	const state = stateStore.load();
 	const ignored = ignoredStore.load();
 	const logEvents = loadLogEvents(sinceMs);

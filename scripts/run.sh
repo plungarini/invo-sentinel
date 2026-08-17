@@ -3,7 +3,7 @@
 # fatal errors and exits(1) rather than dying silently (see
 # process.on('uncaughtException'/'unhandledRejection') in
 # src/cli/auto-copy.ts); this script is what actually brings it back up
-# afterward. State (data/.copy-state.json) and logs/ both persist across
+# afterward. State (data/sentinel.db) and logs/ both persist across
 # restarts, so a restart picks up right where it left off.
 #
 # Also builds and serves the read-only dashboard UI in production mode
