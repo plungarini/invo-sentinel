@@ -23,13 +23,17 @@ export async function GET(request: NextRequest) {
 			return NextResponse.json({ trade });
 		}
 
+		// The History tab shows closed trades only - open positions already have
+		// their own dedicated view (Wallet > Open).
+		const closedTrades = trades.filter((t) => t.status === "closed");
+
 		const limitParam = searchParams.get("limit");
 		if (limitParam) {
 			const limit = Math.max(1, parseInt(limitParam, 10) || 20);
 			const cursor = Math.max(0, parseInt(searchParams.get("cursor") ?? "0", 10) || 0);
-			const page = await enrichHistoryPage(trades.slice(cursor, cursor + limit));
-			const nextCursor = cursor + limit < trades.length ? cursor + limit : null;
-			return NextResponse.json({ trades: page, nextCursor, total: trades.length });
+			const page = await enrichHistoryPage(closedTrades.slice(cursor, cursor + limit));
+			const nextCursor = cursor + limit < closedTrades.length ? cursor + limit : null;
+			return NextResponse.json({ trades: page, nextCursor, total: closedTrades.length });
 		}
 
 		// No pagination params - the full list, e.g. for Analytics' aggregation
