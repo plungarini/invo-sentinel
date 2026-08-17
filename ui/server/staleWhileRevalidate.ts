@@ -32,3 +32,38 @@ export function staleWhileRevalidate<T>(fetcher: () => Promise<T>, ttlMs: number
 		return cache.data;
 	};
 }
+
+/**
+ * Same stale-while-revalidate contract as above, per key - for fetches like
+ * "closed investments for portfolio X" that would otherwise re-hit the same
+ * upstream endpoint on every single request that needs them (e.g. every
+ * History "Load more" page enriching its own handful of entries, with no
+ * memory of what the previous page's enrichment already fetched).
+ */
+export function keyedStaleWhileRevalidate<T>(fetcher: (key: string) => Promise<T>, ttlMs: number) {
+	const cache = new Map<string, { data: T; fetchedAt: number }>();
+	const inFlight = new Map<string, Promise<T>>();
+
+	function refresh(key: string): Promise<T> {
+		let p = inFlight.get(key);
+		if (!p) {
+			p = fetcher(key)
+				.then((data) => {
+					cache.set(key, { data, fetchedAt: Date.now() });
+					return data;
+				})
+				.finally(() => {
+					inFlight.delete(key);
+				});
+			inFlight.set(key, p);
+		}
+		return p;
+	}
+
+	return async function load(key: string): Promise<T> {
+		const entry = cache.get(key);
+		if (!entry) return refresh(key); // cold - must wait
+		if (Date.now() - entry.fetchedAt > ttlMs) refresh(key); // stale - refresh in background, don't await
+		return entry.data;
+	};
+}
