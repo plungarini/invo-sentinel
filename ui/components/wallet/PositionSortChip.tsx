@@ -52,6 +52,7 @@ export default function PositionSortChip({
 						<button
 							key={opt.key}
 							type="button"
+							tabIndex={0}
 							onClick={() => onChange(nextSort(sort, opt.key))}
 							className={`flex w-full cursor-pointer items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors duration-150 active:scale-[0.97] ${
 								state ? "bg-surface-hover text-text" : "text-text-muted hover:bg-surface-hover hover:text-text"
