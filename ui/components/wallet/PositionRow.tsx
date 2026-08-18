@@ -34,6 +34,9 @@ export default function PositionRow({
 
 	const liqPx = position.liquidationPx != null ? parseFloat(position.liquidationPx) : null;
 	const liqFilledPct = computeLiqFilledPct(entryPx, markPx, liqPx);
+	// Dollar loss if the position reaches its liquidation price exactly - same signed-size
+	// math as unrealizedPnl (see estimatePnlAt in the detail modal), just evaluated at liqPx.
+	const liqLossUsd = liqPx != null && Number.isFinite(size) && Number.isFinite(entryPx) ? Math.abs(size * (liqPx - entryPx)) : null;
 	// 3-bar severity gauge: exactly 0% stays fully unlit (no risk at all), then at least
 	// 1 bar lights as soon as there's any real risk, escalating white -> amber -> red.
 	const liqBarsLit =
@@ -78,16 +81,16 @@ export default function PositionRow({
 				</div>
 			</div>
 
-			<div className="mt-3 grid grid-cols-3 items-center gap-3 border-t border-border pt-3">
+			<div className="mt-3 grid grid-cols-2 items-center gap-x-3 gap-y-2.5 border-t border-border pt-3">
 				<div className="min-w-0">
 					<p className="text-[12px] text-text-muted">Allocation</p>
 					<p className="truncate text-[14px] font-semibold tabular-nums">
 						{allocationPct != null ? `${formatUsd(initialMarginUsd!)} (${allocationPct.toFixed(2)}%)` : "N/A"}
 					</p>
 				</div>
-				<div className="min-w-0">
+				<div className="min-w-0 text-right">
 					<p className="text-[12px] text-text-muted">Liq. Risk</p>
-					<div className="flex items-center gap-1.5">
+					<div className="flex items-center justify-end gap-1.5">
 						<div className="flex items-center gap-0.5">
 							{[0, 1, 2].map((i) => (
 								<div key={i} className={`h-3.5 w-1 rounded-full ${i < liqBarsLit ? liqBarColor : liqBarUnlitColor}`} />
@@ -98,9 +101,15 @@ export default function PositionRow({
 						</span>
 					</div>
 				</div>
-				<div className="min-w-0 text-right">
+				<div className="min-w-0">
 					<p className="text-[12px] text-text-muted">Liq. Price</p>
 					<p className="truncate text-[14px] font-semibold tabular-nums">{liqPx != null ? formatUsd(liqPx) : "N/A"}</p>
+				</div>
+				<div className="min-w-0 text-right">
+					<p className="text-[12px] text-text-muted">Liq. Loss</p>
+					<p className="truncate text-[14px] font-semibold tabular-nums text-loss">
+						{liqLossUsd != null ? `-${formatUsd(liqLossUsd)}` : "N/A"}
+					</p>
 				</div>
 			</div>
 		</button>
