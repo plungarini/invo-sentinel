@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useCycleStatus, type StatusResponse } from "@/hooks/useCycleStatus";
 import { useWallet, type WalletResponse } from "@/hooks/useWallet";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useFeesTotal } from "@/hooks/useFeesTotal";
 import TotalBalanceCard from "@/components/shared/TotalBalanceCard";
 import CycleStatusWidget from "@/components/homepage/CycleStatusWidget";
 import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
@@ -17,14 +17,19 @@ export default function OverviewClient({
 	initialStatus,
 	initialWallet,
 	initialAnalytics,
+	initialFees,
 }: {
 	initialStatus: StatusResponse;
 	initialWallet?: WalletResponse;
 	initialAnalytics?: AnalyticsSummary;
+	initialFees?: { totalFeesUsd: number };
 }) {
 	const { data, error } = useCycleStatus(initialStatus);
 	const { data: wallet } = useWallet(initialWallet);
+	// Footer (All-time PnL/Win Rate) genuinely needs the full aggregation; the
+	// Fees stat below uses the lightweight, Wallet-shared useFeesTotal instead.
 	const { data: analytics } = useAnalytics("all", initialAnalytics);
+	const { data: feesData } = useFeesTotal(initialFees);
 
 	if (!data) {
 		return <p className="px-1 text-[15px] text-text-muted">{error ? "Failed to load status." : "Loading…"}</p>;
@@ -40,15 +45,7 @@ export default function OverviewClient({
 					availableUsd={
 						wallet ? wallet.accountValueUsd - wallet.positions.reduce((sum, p) => sum + parseFloat(p.marginUsed), 0) : undefined
 					}
-					feesUsd={analytics?.totalFeesUsd}
-					rightSlot={
-						<Link
-							href="/wallet"
-							className="inline-flex items-center justify-center gap-2 rounded-xl bg-surface px-4 py-2.5 text-[13px] font-semibold text-text transition-all duration-150 ease-out hover:bg-surface-hover active:scale-[0.97]"
-						>
-							View wallet →
-						</Link>
-					}
+					feesUsd={feesData?.totalFeesUsd}
 					footer={
 						<div className="mt-4 flex items-start justify-between gap-2 border-t border-border pt-4">
 							<div className="shrink-0">

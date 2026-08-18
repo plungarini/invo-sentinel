@@ -15,12 +15,18 @@ import TradeDetailModal from "@/components/history/TradeDetailModal";
 import { useWallet, type WalletResponse } from "@/hooks/useWallet";
 import { useTransfers } from "@/hooks/useTransfers";
 import { useTradeHistoryPage } from "@/hooks/useTradeHistoryPage";
-import { useHistoryFeesTotal } from "@/hooks/useHistoryFeesTotal";
+import { useFeesTotal } from "@/hooks/useFeesTotal";
 import { useTradeByBaseId } from "@/hooks/useTradeByBaseId";
 
 const TABS = ["Open", "History", "Transfers"] as const;
 
-export default function WalletClient({ initialData }: { initialData?: WalletResponse }) {
+export default function WalletClient({
+	initialData,
+	initialFees,
+}: {
+	initialData?: WalletResponse;
+	initialFees?: { totalFeesUsd: number };
+}) {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	// A deep link (?trade=) always points at a history entry, so treat History as
@@ -50,7 +56,10 @@ export default function WalletClient({ initialData }: { initialData?: WalletResp
 		isLoadingMore: historyLoadingMore,
 		error: historyError,
 	} = useTradeHistoryPage(visitedTabs.has("History"));
-	const { data: feesData } = useHistoryFeesTotal();
+	// Same SWR key/hook Overview uses for its Fees stat - shares one cached,
+	// SSR-seeded value across both pages, and deliberately not useAnalytics
+	// (which also triggers a live HL positions fetch this banner doesn't need).
+	const { data: feesData } = useFeesTotal(initialFees);
 
 	const selectedBaseId = searchParams.get("trade");
 	const selectedTradeFromPage = selectedBaseId ? historyTrades.find((t) => t.baseId === selectedBaseId) : undefined;
