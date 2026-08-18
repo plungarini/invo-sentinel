@@ -246,6 +246,11 @@ export class HyperliquidClient {
 		return postInfo({ type: 'userFills', user: this.walletAddress, aggregateByTime: true });
 	}
 
+	/** Same fill data as `getUserFills`, bounded to `[startTimeMs, now]` via HL's own `userFillsByTime` - for callers that only need a recent window (e.g. a 24h baseline) and would otherwise pay for a full-account fill history fetch just to filter it down client-side. */
+	async getUserFillsSince(startTimeMs: number): Promise<HyperliquidFill[]> {
+		return postInfo({ type: 'userFillsByTime', user: this.walletAddress, startTime: startTimeMs, aggregateByTime: true });
+	}
+
 	/** Deposits/withdrawals/transfers - separate from trading fills entirely. */
 	async getLedgerUpdates(): Promise<HyperliquidLedgerUpdate[]> {
 		return postInfo({ type: 'userNonFundingLedgerUpdates', user: this.walletAddress });
