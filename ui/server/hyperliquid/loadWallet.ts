@@ -1,12 +1,28 @@
 import "server-only";
 import { readTrackedState } from "../daemon/readState";
+import { readFollowedPortfolios } from "../daemon/readFollowedPortfolios";
 import { getHyperliquidClient } from "./client";
 import { getInvoClient } from "../invo/client";
-import { staleWhileRevalidate } from "../staleWhileRevalidate";
+import { staleWhileRevalidate, keyedStaleWhileRevalidate } from "../staleWhileRevalidate";
 import { loadLastFillTimes } from "./loadLastFillTimes";
 import type { WalletResponse } from "@/hooks/useWallet";
 
 const CACHE_TTL_MS = 4_000; // just bounds the SSR/API-route path's own staleness; the browser gets fresher pushes over /api/wallet/stream
+const OPEN_INVESTMENTS_CACHE_TTL_MS = 60_000; // priceTarget/stopLoss barely change tick to tick - no reason to re-hit Invo per portfolio on every 2s walletBroadcaster tick
+
+/**
+ * `fetchWallet` runs raw (uncached) every 2s from walletBroadcaster.ts, so
+ * without this every followed/tracked portfolio's open-investments call hit
+ * Invo fresh every single tick - N portfolios x one call every 2s was by far
+ * the single biggest driver of this app's own Invo rate-limit hits, worse
+ * than any of the other unbounded calls fixed alongside this one. Same
+ * keyed-cache pattern as loadHistory.ts's loadClosedInvestments, and shared
+ * across both call sites below so a portfolio needed by both pays once.
+ */
+const loadOpenInvestments = keyedStaleWhileRevalidate(
+	(portfolioId: string) => getInvoClient().getOpenInvestments(portfolioId).catch(() => []),
+	OPEN_INVESTMENTS_CACHE_TTL_MS,
+);
 
 /** Bypasses the stale-while-revalidate cache below - for the shared poll loop in walletBroadcaster.ts, which wants the freshest data on every tick, not whatever's cached. */
 export async function fetchWallet(): Promise<WalletResponse> {
@@ -25,8 +41,6 @@ export async function fetchWallet(): Promise<WalletResponse> {
 	const trackedByCoin = new Map(Object.entries(trackedState).map(([baseId, entry]) => [entry.coin, { baseId, ...entry }]));
 	const untrackedCoins = positions.filter((p) => !trackedByCoin.has(p.coin));
 
-	const invo = getInvoClient();
-
 	// The trader's own price target/stop-loss is only known via their Invo
 	// investment record - never placed as a real HL order by this daemon (see
 	// hyperliquid-client.ts's signing-quirk comment on why there's no
@@ -39,7 +53,7 @@ export async function fetchWallet(): Promise<WalletResponse> {
 			? Promise.resolve()
 			: Promise.all(
 					[...trackedPortfolioIds].map(async (portfolioId) => {
-						const open = await invo.getOpenInvestments(portfolioId).catch(() => []);
+						const open = await loadOpenInvestments(portfolioId);
 						for (const inv of open) investmentByBaseId.set(inv.baseId, { priceTarget: inv.priceTarget, stopLoss: inv.stopLoss });
 					}),
 				);
@@ -55,28 +69,28 @@ export async function fetchWallet(): Promise<WalletResponse> {
 		string,
 		{ portfolioTitle: string; ownerUsername?: string; priceTarget: number | null; stopLoss: number | null }
 	>();
+	// Daemon's own DB-synced snapshot, not a live Invo call - see
+	// readFollowedPortfolios' doc on why an independent UI-side Invo call
+	// here shares the daemon's IP-scoped rate-limit budget.
 	const crossRefFetch =
 		untrackedCoins.length === 0
 			? Promise.resolve()
-			: invo
-					.getFollowedPortfolios()
-					.catch(() => [])
-					.then(async (portfolios) => {
-						const allOpen = (await Promise.all(portfolios.map((p) => invo.getOpenInvestments(p.id).catch(() => [])))).flat();
-						for (const p of untrackedCoins) {
-							const isLong = parseFloat(p.szi) > 0;
-							const candidates = allOpen.filter((inv) => inv.ticker === p.coin && inv.directionLong === isLong);
-							if (candidates.length === 1) {
-								const inv = candidates[0];
-								invoMatchByCoin.set(p.coin, {
-									portfolioTitle: inv.portfolio?.title ?? "",
-									ownerUsername: inv.owner?.username,
-									priceTarget: inv.priceTarget,
-									stopLoss: inv.stopLoss,
-								});
-							}
+			: Promise.resolve(readFollowedPortfolios()).then(async (portfolios) => {
+					const allOpen = (await Promise.all(portfolios.map((p) => loadOpenInvestments(p.id)))).flat();
+					for (const p of untrackedCoins) {
+						const isLong = parseFloat(p.szi) > 0;
+						const candidates = allOpen.filter((inv) => inv.ticker === p.coin && inv.directionLong === isLong);
+						if (candidates.length === 1) {
+							const inv = candidates[0];
+							invoMatchByCoin.set(p.coin, {
+								portfolioTitle: inv.portfolio?.title ?? "",
+								ownerUsername: inv.owner?.username,
+								priceTarget: inv.priceTarget,
+								stopLoss: inv.stopLoss,
+							});
 						}
-					});
+					}
+				});
 
 	await Promise.all([trackedFetch, crossRefFetch]);
 

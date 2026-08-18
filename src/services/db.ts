@@ -87,6 +87,7 @@ function runMigrations(db: Database): void {
 		CREATE INDEX IF NOT EXISTS idx_closed_trades_base_id ON closed_trades(base_id);
 		CREATE INDEX IF NOT EXISTS idx_closed_trades_portfolio ON closed_trades(portfolio_id);
 		CREATE INDEX IF NOT EXISTS idx_closed_trades_coin ON closed_trades(coin);
+		CREATE INDEX IF NOT EXISTS idx_closed_trades_closed_at ON closed_trades(closed_at);
 	`);
 }
 

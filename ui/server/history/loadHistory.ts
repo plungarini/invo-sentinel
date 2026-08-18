@@ -3,6 +3,7 @@ import type { ClosedInvestment } from "@daemon/types.js";
 import { readTrackedState } from "../daemon/readState";
 import { readIgnoredTrades } from "../daemon/readIgnored";
 import { readClosedTrades } from "../daemon/readClosedTrades";
+import { readFollowedPortfolios } from "../daemon/readFollowedPortfolios";
 import { readLogEvents } from "../daemon/readLogs";
 import { getInvoClient } from "../invo/client";
 import { getHyperliquidClient } from "../hyperliquid/client";
@@ -14,12 +15,11 @@ const HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // logs are bounded by LOG_R
 const CACHE_TTL_MS = 45_000;
 
 async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
-	const invo = getInvoClient();
 	const hlClientPromise = getHyperliquidClient();
-	// getUserFills only depends on the HL client, not on anything else fetched
-	// here, so it's kicked off as soon as that resolves and run concurrently
-	// with the (slower) Invo followed-portfolios call, instead of after it.
-	const hlUserFillsPromise = hlClientPromise.then((hl) => hl.getUserFills().catch(() => []));
+	// getUserFillsSince only depends on the HL client, not on anything else
+	// fetched here, so it's kicked off as soon as that resolves and run
+	// concurrently with everything else instead of after it.
+	const hlUserFillsPromise = hlClientPromise.then((hl) => hl.getUserFillsSince(Date.now() - HISTORY_WINDOW_MS).catch(() => []));
 
 	const [, state, ignored, closedTrades, logEvents, portfolios, hlUserFills] = await Promise.all([
 		hlClientPromise,
@@ -27,7 +27,11 @@ async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
 		Promise.resolve(readIgnoredTrades()),
 		Promise.resolve(readClosedTrades()),
 		Promise.resolve(readLogEvents(Date.now() - HISTORY_WINDOW_MS)),
-		invo.getFollowedPortfolios(),
+		// The daemon's own DB-synced snapshot, not a live Invo call - see
+		// readFollowedPortfolios' doc: an independent UI-side Invo call here
+		// shares the daemon's IP-scoped rate-limit budget and was the real
+		// cause of intermittent 500s on this route under normal daemon polling.
+		Promise.resolve(readFollowedPortfolios()),
 		hlUserFillsPromise,
 	]);
 	const closedTradesByBaseId = new Map(closedTrades.map((t) => [t.baseId, t]));
@@ -65,10 +69,7 @@ const loadClosedInvestments = keyedStaleWhileRevalidate(
 	(portfolioId: string) => getInvoClient().getClosedInvestments(portfolioId, 1, 30).catch(() => []),
 	CACHE_TTL_MS,
 );
-const loadFollowedPortfoliosForEnrichment = staleWhileRevalidate(
-	() => getInvoClient().getFollowedPortfolios().catch(() => []),
-	CACHE_TTL_MS,
-);
+const loadFollowedPortfoliosForEnrichment = staleWhileRevalidate(async () => readFollowedPortfolios(), CACHE_TTL_MS);
 
 /**
  * Real per-page lazy loading: fills in the one thing the cheap build above

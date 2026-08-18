@@ -5,6 +5,8 @@ import { useWallet, type WalletResponse } from "@/hooks/useWallet";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useFeesTotal } from "@/hooks/useFeesTotal";
 import TotalBalanceCard from "@/components/shared/TotalBalanceCard";
+import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
 import CycleStatusWidget from "@/components/homepage/CycleStatusWidget";
 import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
 import AgentKeyExpiryWidget from "@/components/homepage/AgentKeyExpiryWidget";
@@ -12,6 +14,21 @@ import DaemonHealthWidget from "@/components/homepage/DaemonHealthWidget";
 import RecentActivityWidget from "@/components/homepage/RecentActivityWidget";
 import { formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/types/ui";
+
+/** Matches a single-StatTile Card's rough footprint while cycle status is still loading. */
+function WidgetSkeleton() {
+	return (
+		<Card>
+			<div className="flex items-center gap-3">
+				<Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+				<div className="flex-1">
+					<Skeleton className="h-3 w-20" />
+					<Skeleton className="mt-2 h-4 w-24" />
+				</div>
+			</div>
+		</Card>
+	);
+}
 
 export default function OverviewClient({
 	initialStatus,
@@ -31,10 +48,10 @@ export default function OverviewClient({
 	const { data: analytics } = useAnalytics("all", initialAnalytics);
 	const { data: feesData } = useFeesTotal(initialFees);
 
-	if (!data) {
-		return <p className="px-1 text-[15px] text-text-muted">{error ? "Failed to load status." : "Loading…"}</p>;
-	}
-
+	// The balance banner only ever depends on `wallet`/`analytics`/`feesData`,
+	// each already independently optional below - it renders regardless of
+	// `data` (cycle status). Only the cycle-status-driven widgets below it
+	// need a loading/error swap.
 	return (
 		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
 			<div className="flex flex-col gap-4">
@@ -75,14 +92,25 @@ export default function OverviewClient({
 					}
 				/>
 
-				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-					<CycleStatusWidget cycle={data.cycle} />
-					<DaemonHealthWidget cycle={data.cycle} />
-					<TokenExpiryWidget tokenDaysRemaining={data.tokenDaysRemaining} />
-					<AgentKeyExpiryWidget />
-				</div>
+				{data ? (
+					<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+						<CycleStatusWidget cycle={data.cycle} />
+						<DaemonHealthWidget cycle={data.cycle} />
+						<TokenExpiryWidget tokenDaysRemaining={data.tokenDaysRemaining} />
+						<AgentKeyExpiryWidget />
+					</div>
+				) : error ? (
+					<p className="px-1 text-[15px] text-text-muted">Failed to load status.</p>
+				) : (
+					<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+						<WidgetSkeleton />
+						<WidgetSkeleton />
+						<WidgetSkeleton />
+						<AgentKeyExpiryWidget />
+					</div>
+				)}
 
-				<RecentActivityWidget activity={data.recentActivity} />
+				{data && <RecentActivityWidget activity={data.recentActivity} />}
 			</div>
 		</div>
 	);

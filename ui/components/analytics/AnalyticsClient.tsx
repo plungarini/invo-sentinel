@@ -7,6 +7,8 @@ import PerPortfolioTable from "@/components/analytics/PerPortfolioTable";
 import ByCoinTable from "@/components/analytics/ByCoinTable";
 import PnlOverTimeChart from "@/components/analytics/PnlOverTimeChart";
 import AnalyticsPeriodSelector from "@/components/analytics/AnalyticsPeriodSelector";
+import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useTransfers } from "@/hooks/useTransfers";
 import { periodStart } from "@/lib/analyticsPeriod";
@@ -27,8 +29,30 @@ export default function AnalyticsClient({ initialData }: { initialData: Analytic
 		return transfersData.transfers.filter((t) => t.time >= startMs);
 	}, [transfersData?.transfers, period]);
 
-	if (error || !data) {
-		return <p className="px-1 text-[15px] text-loss">Failed to load analytics.</p>;
+	// With `keepPreviousData`, `data` is only ever undefined on a genuine cold
+	// start (no prior successful fetch to fall back to) - a period switch keeps
+	// showing the last period's numbers instead of dropping to this branch, so
+	// "Failed to load" only fires for a real error, never mid-navigation.
+	if (!data) {
+		return (
+			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
+				<div className="flex flex-col gap-4">
+					{error ? (
+						<p className="px-1 text-[15px] text-loss">Failed to load analytics.</p>
+					) : (
+						<>
+							<Card>
+								<Skeleton className="h-4 w-32" />
+								<Skeleton className="mt-3 h-9 w-48" />
+							</Card>
+							<Card>
+								<Skeleton className="h-24 w-full" />
+							</Card>
+						</>
+					)}
+				</div>
+			</div>
+		);
 	}
 
 	return (
