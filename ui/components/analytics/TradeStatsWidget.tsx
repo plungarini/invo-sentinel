@@ -1,10 +1,33 @@
 import { ArrowUpRight, Gauge, Clock, Coins, Trophy, TrendingDown } from "lucide-react";
 import Card from "@/components/shared/Card";
 import StatTile from "@/components/shared/StatTile";
+import Skeleton from "@/components/shared/Skeleton";
 import type { AnalyticsSummary } from "@/types/ui";
 import { formatDuration, formatUsd } from "@/lib/format";
 
-export default function TradeStatsWidget({ summary }: { summary: AnalyticsSummary }) {
+export default function TradeStatsWidget({ summary, hasError }: { summary?: AnalyticsSummary; hasError?: boolean }) {
+	if (!summary) {
+		return (
+			<Card title="Trade Stats">
+				{hasError ? (
+					<p className="text-[14px] text-loss">Failed to load analytics.</p>
+				) : (
+					<div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+						{Array.from({ length: 6 }).map((_, i) => (
+							<div key={i} className="flex items-center gap-3">
+								<Skeleton className="h-10 w-10 shrink-0 rounded-xl" />
+								<div className="flex-1">
+									<Skeleton className="h-3 w-16" />
+									<Skeleton className="mt-2 h-5 w-20" />
+								</div>
+							</div>
+						))}
+					</div>
+				)}
+			</Card>
+		);
+	}
+
 	const {
 		totalClosedTrades,
 		longCount,
