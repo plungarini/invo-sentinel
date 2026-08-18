@@ -168,6 +168,8 @@ export interface HyperliquidFill {
 	feeToken?: string;
 	/** Client order id - see cloid-codec.ts for Invo's own encoding of this field on mimic-placed orders. Absent/null for most fills (only set when the placing client chose to). */
 	cloid?: string | null;
+	/** Present only when this fill was a liquidation (HL's own signal, not inferred) - the mark price at which the liquidation engine acted. */
+	liquidationMarkPx?: string;
 	[key: string]: unknown;
 }
 

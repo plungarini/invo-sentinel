@@ -10,6 +10,8 @@ export interface FillTrade {
 	sizeOpened?: number;
 	pnlUsd: number;
 	feesUsd: number;
+	/** True when any closing fill carried HL's own `liquidationMarkPx` - ground truth, not inferred from PnL/timing. */
+	isLiquidated: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ export function reconstructClosedTradesFromFills(fills: HyperliquidFill[]): Fill
 		let feesUsd = 0;
 		let isBuy: boolean | undefined;
 		let closedAtMs: number | undefined;
+		let isLiquidated = false;
 
 		const flush = () => {
 			if (closedSize > 0 && closedAtMs !== undefined) {
@@ -54,6 +57,7 @@ export function reconstructClosedTradesFromFills(fills: HyperliquidFill[]): Fill
 					sizeOpened: openSize > 0 ? openSize : undefined,
 					pnlUsd,
 					feesUsd,
+					isLiquidated,
 				});
 			}
 			openNotional = 0;
@@ -65,6 +69,7 @@ export function reconstructClosedTradesFromFills(fills: HyperliquidFill[]): Fill
 			feesUsd = 0;
 			isBuy = undefined;
 			closedAtMs = undefined;
+			isLiquidated = false;
 		};
 
 		for (const f of sorted) {
@@ -89,6 +94,7 @@ export function reconstructClosedTradesFromFills(fills: HyperliquidFill[]): Fill
 				closeNotional += sz * px;
 				pnlUsd += parseFloat(f.closedPnl || "0");
 				closedAtMs = f.time;
+				if (f.liquidationMarkPx != null) isLiquidated = true;
 			} else {
 				continue;
 			}
