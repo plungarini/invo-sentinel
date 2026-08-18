@@ -37,6 +37,8 @@ export interface PortfolioPnlBreakdown {
 	determinedPnlPercentTradeCount: number;
 }
 
+export type AnalyticsPeriod = "today" | "wtd" | "mtd" | "ytd" | "all";
+
 export interface PnlOverTimePoint {
 	closedAt: string;
 	cumulativePnlUsd: number;

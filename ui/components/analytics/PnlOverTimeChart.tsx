@@ -112,9 +112,11 @@ function buildTransferMarkers(pnlOverTime: PnlOverTimePoint[], transfers: Hyperl
 export default function PnlOverTimeChart({
 	pnlOverTime,
 	transfers,
+	periodSelector,
 }: {
 	pnlOverTime: PnlOverTimePoint[];
 	transfers?: HyperliquidLedgerUpdate[];
+	periodSelector?: React.ReactNode;
 }) {
 	const transferMarkers = useMemo(() => buildTransferMarkers(pnlOverTime, transfers), [pnlOverTime, transfers]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
@@ -131,8 +133,8 @@ export default function PnlOverTimeChart({
 
 	if (pnlOverTime.length < 2) {
 		return (
-			<Card title="Cumulative PnL">
-				<p className="text-sm text-text-muted">Not enough closed trade data yet for a chart.</p>
+			<Card title="Cumulative PnL" action={periodSelector}>
+				<p className="text-sm text-text-muted">Not enough closed trade data in this period for a chart.</p>
 			</Card>
 		);
 	}
@@ -143,7 +145,7 @@ export default function PnlOverTimeChart({
 	const tickFontSize = isMobile ? 11 : 12;
 
 	return (
-		<Card title="Cumulative PnL">
+		<Card title="Cumulative PnL" action={periodSelector}>
 			<div className="h-72 w-full">
 				<ResponsiveContainer width="100%" height="100%">
 					<AreaChart data={pnlOverTime} margin={{ top: 20, right: isMobile ? 4 : 12, bottom: 0, left: isMobile ? -14 : -20 }}>
