@@ -55,6 +55,8 @@ export interface AnalyticsSummary {
 	determinedPnlTradeCount: number;
 	determinedPnlPercentTradeCount: number;
 	totalPnlUsd: number;
+	/** Unrealized PnL summed across currently-open positions, live from the exchange - not part of `totalPnlUsd`, which is closed trades only. */
+	openPnlUsd: number;
 	totalFeesUsd: number;
 	winRate: number;
 	avgPnlPercent: number;
