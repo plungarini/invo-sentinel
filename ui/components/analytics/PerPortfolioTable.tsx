@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
 import type { PortfolioPnlBreakdown } from "@/types/ui";
 import { formatPct, formatUsd } from "@/lib/format";
 
@@ -12,8 +13,30 @@ const AVATAR_TONES = [
 	"bg-loss/20 text-loss",
 ];
 
-export default function PerPortfolioTable({ perPortfolio }: { perPortfolio: PortfolioPnlBreakdown[] }) {
+export default function PerPortfolioTable({
+	perPortfolio,
+	hasError,
+}: {
+	perPortfolio?: PortfolioPnlBreakdown[];
+	hasError?: boolean;
+}) {
 	const [query, setQuery] = useState("");
+
+	if (!perPortfolio) {
+		return (
+			<Card title="By Portfolio">
+				{hasError ? (
+					<p className="text-[14px] text-loss">Failed to load analytics.</p>
+				) : (
+					<div className="flex flex-col gap-2.5">
+						{Array.from({ length: 3 }).map((_, i) => (
+							<Skeleton key={i} className="h-[104px] w-full rounded-xl" />
+						))}
+					</div>
+				)}
+			</Card>
+		);
+	}
 
 	if (perPortfolio.length === 0) {
 		return (

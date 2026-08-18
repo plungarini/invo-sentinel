@@ -1,14 +1,13 @@
 "use client";
 
 import type { AnalyticsPeriod } from "@/types/ui";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 
-const PERIODS: { value: AnalyticsPeriod; label: string; shortLabel: string }[] = [
-	{ value: "today", label: "Today", shortLabel: "Today" },
-	{ value: "wtd", label: "Week to date", shortLabel: "WTD" },
-	{ value: "mtd", label: "Month to date", shortLabel: "MTD" },
-	{ value: "ytd", label: "Year to date", shortLabel: "YTD" },
-	{ value: "all", label: "All Time", shortLabel: "All" },
+const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
+	{ value: "today", label: "Today" },
+	{ value: "wtd", label: "Week" },
+	{ value: "mtd", label: "Month" },
+	{ value: "ytd", label: "Year" },
+	{ value: "all", label: "All Time" },
 ];
 
 export default function AnalyticsPeriodSelector({
@@ -18,20 +17,20 @@ export default function AnalyticsPeriodSelector({
 	period: AnalyticsPeriod;
 	onChange: (period: AnalyticsPeriod) => void;
 }) {
-	const isMobile = useMediaQuery("(max-width: 767px)");
-
 	return (
-		<div className="flex flex-wrap gap-1.5">
+		<div className="flex flex-wrap gap-2">
 			{PERIODS.map((p) => (
 				<button
 					key={p.value}
 					type="button"
 					onClick={() => onChange(p.value)}
-					className={`cursor-pointer rounded-full px-2.5 py-1 text-[12.5px] font-semibold transition-all duration-150 ease-out active:scale-[0.97] ${
-						period === p.value ? "bg-surface text-text" : "text-text-muted hover:bg-surface/60 hover:text-text"
+					className={`cursor-pointer rounded-full px-4 py-2 text-[14px] font-semibold transition-all duration-150 ease-out active:scale-[0.97] ${
+						period === p.value
+							? "bg-bg text-text"
+							: "bg-surface-hover text-text-muted hover:bg-[#232326] hover:text-text"
 					}`}
 				>
-					{isMobile ? p.shortLabel : p.label}
+					{p.label}
 				</button>
 			))}
 		</div>

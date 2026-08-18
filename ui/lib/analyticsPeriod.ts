@@ -1,5 +1,8 @@
 import type { AnalyticsPeriod } from "@/types/ui";
 
+/** Shared by the SSR page's initial fetch, the client's initial period state, and useAnalytics's fallback-data key, so all three agree on what "no selection yet" means. */
+export const DEFAULT_ANALYTICS_PERIOD: AnalyticsPeriod = "wtd";
+
 function startOfDay(d: Date): Date {
 	const s = new Date(d);
 	s.setHours(0, 0, 0, 0);
