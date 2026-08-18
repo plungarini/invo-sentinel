@@ -36,6 +36,7 @@ export default function PositionSortChip({
 		<div className="group relative inline-block">
 			<button
 				type="button"
+				tabIndex={0}
 				className="flex cursor-pointer items-center gap-1.5 rounded-full px-4 py-2 text-[14px] font-semibold text-text-muted transition-all duration-150 ease-out hover:bg-surface/60 hover:text-text active:scale-[0.97] group-focus-within:bg-surface group-focus-within:text-text"
 			>
 				{`Sort: ${activeLabel}`}
