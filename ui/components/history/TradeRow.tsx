@@ -23,6 +23,7 @@ export default function TradeRow({ trade, onSelect }: { trade: TradeHistoryEntry
 					<div className="flex items-center gap-2">
 						<span className="text-[17px] font-bold tracking-tight">{trade.coin}</span>
 						{trade.status === "open" && <Badge tone="amber">Open</Badge>}
+						{trade.closeReason === "Liquidated" && <Badge tone="loss">Liquidated</Badge>}
 					</div>
 					<p className="mt-1 truncate text-[13px] text-text-muted">
 						{direction ?? "N/A"}

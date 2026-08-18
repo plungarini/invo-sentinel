@@ -15,6 +15,9 @@ export const FILL_MATCH_TOLERANCE_MS = 6 * 60 * 60 * 1000;
 /** Sentinel closeReason for a real HL fill that never matched any local baseId at all - no state/log trail whatsoever, just an exchange-side close. Distinct from GENERIC_CLOSE_REASON, which still has a baseId, just an unknown reason. */
 export const UNATTRIBUTED_CLOSE_REASON = "Unattributed";
 
+/** Overrides any other closeReason source once a matching HL fill confirms it - exchange ground truth beats daemon/Invo-derived guesses like "manual close detected". */
+export const LIQUIDATED_CLOSE_REASON = "Liquidated";
+
 export interface BuildTradeHistoryArgs {
 	state: PositionStateMap;
 	ignored: IgnoredTradesMap;
@@ -209,6 +212,7 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 			if (fillIdx !== undefined) {
 				usedFillTradeIndices.add(fillIdx);
 				const trade = fillTrades[fillIdx];
+				if (trade.isLiquidated) closeReason = LIQUIDATED_CLOSE_REASON;
 				pnlUsd = trade.pnlUsd;
 				feesUsd = trade.feesUsd;
 				closedAt = closedAt ?? trade.closedAt; // ground-truth timestamp when we had none locally
@@ -295,7 +299,7 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 			pnlPercent: notionalBase ? (trade.pnlUsd / notionalBase) * 100 : undefined,
 			pnlUsd: trade.pnlUsd,
 			feesUsd: trade.feesUsd,
-			closeReason: UNATTRIBUTED_CLOSE_REASON,
+			closeReason: trade.isLiquidated ? LIQUIDATED_CLOSE_REASON : UNATTRIBUTED_CLOSE_REASON,
 			lifecycle,
 		});
 	});
