@@ -138,9 +138,13 @@ export interface AssetMeta {
  *     a standalone trigger order with grouping 'na' is a structurally
  *     different, never-tested code path on the same fragile signer.)
  */
+/** No genuine allMids tick should ever be silent this long; past it, isWebSocketConnected() still saying "connected" is not enough to trust the snapshot - treat it as dead and fall back to REST. */
+const LIVE_MIDS_STALE_MS = 15_000;
+
 export class HyperliquidClient {
 	private sdk: Hyperliquid | null = null;
 	private liveMids: Record<string, string> | null = null;
+	private liveMidsReceivedAt: number | null = null;
 
 	constructor(
 		private agentKey: string,
@@ -170,15 +174,29 @@ export class HyperliquidClient {
 			// - a different keyspace than the bare-ticker REST /info allMids this
 			// project uses everywhere else, silently breaking every markPx lookup.
 			this.getSdk().ws.on('message', (msg: any) => {
-				if (msg?.channel === 'allMids' && msg?.data?.mids) this.liveMids = msg.data.mids;
+				if (msg?.channel === 'allMids' && msg?.data?.mids) {
+					this.liveMids = msg.data.mids;
+					this.liveMidsReceivedAt = Date.now();
+				}
 			});
 			this.getSdk().ws.sendMessage({ method: 'subscribe', subscription: { type: 'allMids' } });
 		}
 	}
 
-	/** Live mark prices pushed over WS, or null if not subscribed/nothing received yet - callers should fall back to `getAllMids()` (REST) in that case. */
+	/**
+	 * Live mark prices pushed over WS, or null if not subscribed/nothing received
+	 * yet/the feed has gone quiet - callers should fall back to `getAllMids()`
+	 * (REST) in any of those cases. `isWebSocketConnected()` alone isn't enough:
+	 * it reflects the raw socket state, not whether the subscribed `allMids`
+	 * channel is actually still delivering ticks - a socket that never formally
+	 * drops but silently stops pushing updates would otherwise freeze every
+	 * markPx-derived display (e.g. the Wallet page's Liq. Risk) at whatever
+	 * value was last received, indefinitely.
+	 */
 	getLiveMids(): Record<string, string> | null {
-		return this.sdk?.isWebSocketConnected() ? this.liveMids : null;
+		if (!this.sdk?.isWebSocketConnected()) return null;
+		if (this.liveMidsReceivedAt == null || Date.now() - this.liveMidsReceivedAt > LIVE_MIDS_STALE_MS) return null;
+		return this.liveMids;
 	}
 
 	private getSdk(): Hyperliquid {
