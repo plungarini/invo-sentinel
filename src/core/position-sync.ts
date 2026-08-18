@@ -1,11 +1,12 @@
 import { randomBytes, randomUUID } from 'crypto';
 import { extractAvgFillPrice, orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
+import type { ClosedTradesStore } from '../services/closed-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
-import type { IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
-import { resolveMimickedCandidate } from './mimic-resolver.js';
+import type { HyperliquidFill, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
+import { resolveConflictByCloid } from './cloid-attribution.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
 const HL_MIN_NOTIONAL_USD = 10; // exchange-enforced floor; below this HL rejects the order outright
@@ -25,6 +26,10 @@ export interface PositionSyncOptions {
 	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
+	/** Memoized per-cycle - conflicts are rare, so this only actually calls HL when one occurs, and at most once per cycle regardless of how many. */
+	getFillsOnce: () => Promise<HyperliquidFill[]>;
+	/** Durable closed-trade history - written once per real close, so portfolio-level analytics survive both the close and a later unfollow. */
+	closedTrades: ClosedTradesStore;
 }
 
 /**
@@ -66,7 +71,7 @@ export class PositionSync {
 		ignored: IgnoredTradesMap,
 		risk: RiskConfig,
 	): Promise<void> {
-		const { log, staleEntry, dryRun, hl, invo } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo, getFillsOnce } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
@@ -142,7 +147,6 @@ export class PositionSync {
 
 		const clampedFraction = clampMarginFraction(rawPercent, risk);
 		const [equity, mids] = await Promise.all([hl.getAccountValueUsd(), hl.getAllMids()]);
-		const targetMarginUsd = clampedFraction * equity;
 
 		const entry = state[baseId] ?? {
 			coin,
@@ -182,6 +186,20 @@ export class PositionSync {
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
+				this.opts.closedTrades.record({
+					baseId,
+					coin,
+					isBuy: entry.isBuy,
+					leverage: entry.leverage,
+					marginUsd: entry.marginUsd,
+					portfolioId: entry.portfolioId,
+					portfolioTitle: investment.portfolio?.title,
+					ownerUsername: entry.ownerUsername,
+					entryPrice: entry.entryPrice,
+					openedAt: entry.openedAt,
+					closedAt: new Date().toISOString(),
+					closeReason: 'manual_close_detected',
+				});
 				log({
 					type: 'manual_close_detected',
 					baseId,
@@ -200,6 +218,20 @@ export class PositionSync {
 					ignoredAt: new Date().toISOString(),
 				};
 				delete state[baseId];
+				this.opts.closedTrades.record({
+					baseId,
+					coin,
+					isBuy: entry.isBuy,
+					leverage: entry.leverage,
+					marginUsd: entry.marginUsd,
+					portfolioId: entry.portfolioId,
+					portfolioTitle: investment.portfolio?.title,
+					ownerUsername: entry.ownerUsername,
+					entryPrice: entry.entryPrice,
+					openedAt: entry.openedAt,
+					closedAt: new Date().toISOString(),
+					closeReason: 'manual_direction_change_detected',
+				});
 				log({
 					type: 'manual_direction_change_detected',
 					baseId,
@@ -223,6 +255,12 @@ export class PositionSync {
 						realMarginUsd,
 						detail: 'real HL position size no longer matched tracked margin - resynced before computing this cycle\'s delta',
 					});
+					// Adopting the real size here is now genuinely final, not a
+					// staging step toward re-chasing an absolute trader-%
+					// target - see the fractionDelta targeting below, which
+					// only reacts to the TRADER's own % actually changing, so
+					// a manual top-up/reduce this resync just picked up is
+					// left exactly as the user placed it.
 					entry.marginUsd = realMarginUsd;
 				}
 			}
@@ -234,9 +272,9 @@ export class PositionSync {
 		// other baseId may still be the right one this cycle). Right
 		// direction, and no other followed trader shares both this coin and
 		// this direction → unambiguous, auto-adopt immediately. Right
-		// direction, but another followed trader shares it too → ask Invo's
-		// own mimic-tracking (mimic-resolver.ts) which trade you actually
-		// mimicked, instead of guessing. Only flag it if that's inconclusive.
+		// direction, but another followed trader shares it too → decode the
+		// position's own order cloid (cloid-attribution.ts) to know exactly
+		// which one, instead of guessing. Only flag it if that's inconclusive.
 		if (!entry.ourBaseShortId) {
 			const livePositions = await hl.getPositions();
 			const existing = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
@@ -261,17 +299,18 @@ export class PositionSync {
 				let adopt = sameDirectionRivals.length === 0;
 
 				if (!adopt) {
-					const resolution = await resolveMimickedCandidate(invo, [investment, ...sameDirectionRivals]);
-					if (resolution.resolvedBaseId === baseId) {
+					const fills = await getFillsOnce();
+					const resolvedBaseId = resolveConflictByCloid(fills, coin, [investment, ...sameDirectionRivals]);
+					if (resolvedBaseId === baseId) {
 						adopt = true;
-						log({ type: 'conflict_resolved', baseId, coin, reason: resolution.reason });
-					} else if (resolution.resolvedBaseId) {
+						log({ type: 'conflict_resolved_by_cloid', baseId, coin });
+					} else if (resolvedBaseId) {
 						log({
 							type: 'skip',
-							reason: 'Invo mimic-tracking confirms a different baseId owns this position',
+							reason: "this wallet's own order cloid decodes to a different baseId owning this position",
 							baseId,
 							coin,
-							resolvedBaseId: resolution.resolvedBaseId,
+							resolvedBaseId,
 						});
 						return;
 					} else {
@@ -280,7 +319,7 @@ export class PositionSync {
 							ignored[baseId] = {
 								coin,
 								portfolioId: investment.portfolio?.id,
-								reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and mimic-tracking couldn't confirm it owns this coin; permanently ignored regardless of PnL`,
+								reason: `entry is ${verdict.ageMinutes.toFixed(1)}min old (limit ${staleEntry.maxAgeMinutes}min) and cloid decoding couldn't confirm it owns this coin; permanently ignored regardless of PnL`,
 								ignoredAt: new Date().toISOString(),
 							};
 							log({
@@ -297,7 +336,8 @@ export class PositionSync {
 						}
 						log({
 							type: 'existing_position_conflict',
-							reason: `multiple followed traders hold this coin in the same direction and mimic-tracking couldn't confirm one (${resolution.reason})`,
+							reason:
+								"multiple followed traders hold this coin in the same direction and this wallet's own order cloid could not confirm which one (no decodable Invo cloid on any recent fill for this coin)",
 							baseId,
 							coin,
 							trader: investment.owner?.username,
@@ -372,9 +412,42 @@ export class PositionSync {
 			}
 		}
 
+		// Target is the CURRENT (possibly just-resynced/adopted) margin plus
+		// only the CHANGE in the trader's own fraction since we last acted -
+		// never an absolute clampedFraction*equity target recomputed from
+		// scratch every cycle. That absolute-target approach actively fought
+		// any manual top-up/reduce the user made directly on the exchange:
+		// resync would adopt the user's real (larger or smaller) size as the
+		// new baseline, then the very same cycle immediately "corrected" it
+		// right back toward the trader's unchanged % - silently undoing the
+		// user's own manual action and realizing a real loss on the round
+		// trip (confirmed live 2026-08-12 on ARB/XRP; see INCIDENT_LOG.md).
+		// A brand-new open or a just-auto-adopted position has no prior
+		// fraction to diff against (lastAppliedFraction is unset) - that
+		// first cycle still targets the full absolute amount, same as
+		// before; every cycle after tracks only the trader-driven delta.
+		// `priorFraction` is read once into a local rather than mutating
+		// `entry` directly - entry can be a live reference into `state`, and
+		// this fraction must not land in `state[baseId]` unless a real
+		// order actually executes (or the position is confirmed dust-close,
+		// both handled explicitly below); otherwise a failed order attempt
+		// would silently mark this fraction "already applied" with no order
+		// ever having moved marginUsd to match.
+		const priorFraction = entry.lastAppliedFraction;
+		const isFirstEverEvaluation = priorFraction == null;
+		const fractionDelta = isFirstEverEvaluation ? clampedFraction : clampedFraction - priorFraction;
+		const targetMarginUsd = isFirstEverEvaluation ? clampedFraction * equity : entry.marginUsd + fractionDelta * equity;
+		// Only a first-ever evaluation commits the baseline unconditionally
+		// (even with no order needed - dust-matches-target on adopt still
+		// starts incremental tracking). An already-tracked position's
+		// pending sub-$1 delta is left uncommitted so it keeps accumulating
+		// across cycles instead of being silently dropped (mirrors
+		// entry.marginUsd itself, only updated once an order executes).
+		const fractionToPersistIfNoOrder = isFirstEverEvaluation ? clampedFraction : priorFraction;
+
 		const deltaMarginUsd = targetMarginUsd - entry.marginUsd;
 		if (Math.abs(deltaMarginUsd) < MIN_ORDER_USD) {
-			state[baseId] = { ...entry, leverage, isBuy };
+			state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 			return; // steady-state common case every cycle; no log spam
 		}
 
@@ -406,7 +479,7 @@ export class PositionSync {
 				// cycle, when targetMarginUsd has drifted further from
 				// entry.marginUsd, instead of hammering the exchange with a
 				// guaranteed-rejected order every poll.
-				state[baseId] = { ...entry, leverage, isBuy };
+				state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 				return;
 			}
 		}
@@ -421,7 +494,7 @@ export class PositionSync {
 		const deltaSize = parseFloat((deltaNotionalUsd / price).toFixed(szDecimals));
 
 		if (deltaSize <= 0) {
-			state[baseId] = { ...entry, leverage, isBuy };
+			state[baseId] = { ...entry, leverage, isBuy, lastAppliedFraction: fractionToPersistIfNoOrder };
 			return;
 		}
 
@@ -442,6 +515,7 @@ export class PositionSync {
 				isBuy,
 				leverage,
 				marginUsd: finalMarginUsd,
+				lastAppliedFraction: clampedFraction,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
 				ownerUsername: investment.owner?.username,
@@ -535,6 +609,7 @@ export class PositionSync {
 			isBuy,
 			leverage,
 			marginUsd: finalMarginUsd,
+			lastAppliedFraction: clampedFraction,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
 			ownerUsername: investment.owner?.username,
@@ -561,16 +636,34 @@ export class PositionSync {
 		});
 	}
 
-	/** Fully mirrors a close; always, never clamped. */
-	async close(baseId: string, state: PositionStateMap): Promise<void> {
-		const { log, dryRun, hl, invo } = this.opts;
+	/** Fully mirrors a close; always, never clamped. `portfolioTitle` is a point-in-time snapshot for the durable closed-trade record - state itself never stores it, only `portfolioId`. */
+	async close(baseId: string, state: PositionStateMap, portfolioTitle?: string): Promise<void> {
+		const { log, dryRun, hl, invo, closedTrades } = this.opts;
 		const entry = state[baseId];
 		if (!entry) return; // caller already knows it's tracked; defensive only
+
+		const recordClosedTrade = (closingPrice: number | null, closeReason: string) =>
+			closedTrades.record({
+				baseId,
+				coin: entry.coin,
+				isBuy: entry.isBuy,
+				leverage: entry.leverage,
+				marginUsd: entry.marginUsd,
+				portfolioId: entry.portfolioId,
+				portfolioTitle,
+				ownerUsername: entry.ownerUsername,
+				entryPrice: entry.entryPrice,
+				closingPrice: closingPrice ?? undefined,
+				openedAt: entry.openedAt,
+				closedAt: new Date().toISOString(),
+				closeReason,
+			});
 
 		const positions = await hl.getPositions();
 		const pos = positions.find((p) => p.coin === entry.coin);
 		if (!pos) {
 			log({ type: 'skip_close', reason: 'no open HL position for this coin', baseId, coin: entry.coin });
+			recordClosedTrade(null, 'skip_close_no_real_position');
 			delete state[baseId];
 			return;
 		}
@@ -616,6 +709,7 @@ export class PositionSync {
 			hlResult: closeResult,
 			invoResult,
 		});
+		recordClosedTrade(extractAvgFillPrice(closeResult), 'closed');
 		delete state[baseId];
 	}
 }

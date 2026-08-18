@@ -5,9 +5,9 @@ import type { AnalyticsSummary } from "@/types/ui";
 import { formatPct, formatUsd } from "@/lib/format";
 
 export default function OverallPnlSummary({ summary }: { summary: AnalyticsSummary }) {
-	const { totalPnlUsd, totalFeesUsd, winRate, avgPnlPercent, determinedPnlPercentTradeCount } = summary;
+	const { totalPnlUsd, openPnlUsd, totalFeesUsd, winRate, avgPnlPercent, determinedPnlPercentTradeCount } = summary;
 	const hasAvgPercent = determinedPnlPercentTradeCount > 0;
-	const netPnlUsd = totalPnlUsd - totalFeesUsd;
+	const netPnlUsd = totalPnlUsd + openPnlUsd - totalFeesUsd;
 
 	return (
 		<Card title="Overview">
@@ -18,7 +18,7 @@ export default function OverallPnlSummary({ summary }: { summary: AnalyticsSumma
 					valueClassName={netPnlUsd >= 0 ? "text-profit" : "text-loss"}
 					icon={DollarSign}
 					tone={netPnlUsd >= 0 ? "profit" : "loss"}
-					title={totalFeesUsd > 0 ? `Net of ${formatUsd(totalFeesUsd)} in fees (${formatUsd(totalPnlUsd)} before fees)` : undefined}
+					title={`Closed ${formatUsd(totalPnlUsd)} + open ${formatUsd(openPnlUsd)}${totalFeesUsd > 0 ? ` - ${formatUsd(totalFeesUsd)} fees` : ""}`}
 				/>
 				<StatTile label="Win Rate" value={`${winRate.toFixed(2)}%`} icon={TrendingUp} tone="accent" />
 				<StatTile

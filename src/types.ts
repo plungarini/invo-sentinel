@@ -76,6 +76,15 @@ export interface PositionState {
 	entryPrice?: number;
 	/** ISO timestamp of when this entry was first opened/adopted. */
 	openedAt?: string;
+	/**
+	 * The risk-clamped trader fraction (0-1) we last sized an order from.
+	 * Lets openOrAdjust tell "the trader's own % actually changed" apart
+	 * from "the user manually resized on the exchange" - only the former
+	 * should drive a new order. Absent on a brand-new/just-adopted entry,
+	 * meaning the next cycle still computes one absolute target (the normal
+	 * open/adopt sizing), then starts tracking incremental changes from there.
+	 */
+	lastAppliedFraction?: number;
 }
 
 /** Full local state, persisted to disk. Keyed by the trader's baseId. */
@@ -95,6 +104,21 @@ export interface IgnoredTradeEntry {
 
 /** Full local ignore-list, persisted to disk. Keyed by the trader's baseId. */
 export type IgnoredTradesMap = Record<string, IgnoredTradeEntry>;
+
+/** Cached result of decoding a live HL position's cloid for one coin - see cloid-attribution.ts. Keyed by coin so a close+reopen under a new mimic is picked up via the positionSize check, not by baseId (which isn't known until resolved). */
+export type CloidAttributionCacheEntry =
+	| { kind: 'manual'; checkedAt: string; positionSize: string }
+	| {
+			kind: 'resolved';
+			checkedAt: string;
+			positionSize: string;
+			baseShortId: string;
+			investmentBaseId: string;
+			portfolioId: string;
+			trader?: string;
+	  };
+
+export type CloidAttributionCache = Record<string, CloidAttributionCacheEntry>;
 
 export interface RiskConfig {
 	/** Fraction, e.g. 0.02 for 2%. */
@@ -142,6 +166,10 @@ export interface HyperliquidFill {
 	/** USD-denominated, per HL's own fill payload - negative for rebates. */
 	fee?: string;
 	feeToken?: string;
+	/** Client order id - see cloid-codec.ts for Invo's own encoding of this field on mimic-placed orders. Absent/null for most fills (only set when the placing client chose to). */
+	cloid?: string | null;
+	/** Present only when this fill was a liquidation (HL's own signal, not inferred) - the mark price at which the liquidation engine acted. */
+	liquidationMarkPx?: string;
 	[key: string]: unknown;
 }
 
@@ -150,16 +178,21 @@ export interface HyperliquidFill {
  * withdrawals, and internal transfers, independent of trading activity.
  * `delta.type` is HL's own classification (e.g. 'deposit', 'withdraw',
  * 'send', 'receive', 'accountClassTransfer'); shape otherwise varies by
- * type, so most fields beyond `type`/`usdcValue` are left as unknown.
+ * type - a 'deposit'/'withdraw' carries its amount in `usdc`, while a spot
+ * transfer ('send'/'receive') carries it in `usdcValue`/`amount` instead -
+ * so most fields beyond `type` are left as unknown.
  */
 export interface HyperliquidLedgerUpdate {
 	time: number;
 	hash: string;
 	delta: {
 		type: string;
+		usdc?: string;
 		usdcValue?: string;
 		amount?: string;
 		token?: string;
+		/** Sender address on a 'send'/'receive' entry - see KNOWN_DEPOSIT_RELAYERS in TransfersList.tsx. */
+		user?: string;
 		[key: string]: unknown;
 	};
 }
@@ -174,6 +207,32 @@ export interface ClosedInvestment extends OpenInvestment {
 	closedAt: string;
 	closingPrice: number | null;
 	reasonClosed: string | null;
+}
+
+/**
+ * Durable record of one fully-closed mirrored trade, persisted to
+ * `closed_trades` in `sentinel.db` - the one history table that survives
+ * both a position closing (PositionState is deleted from `position_state`
+ * at that point) and its portfolio later being unfollowed (which stops
+ * tracking but never touches this record). `portfolioTitle` is a snapshot
+ * taken at close time specifically so portfolio-level analytics still work
+ * after an unfollow, when the live followed-portfolios list no longer has
+ * that title to offer.
+ */
+export interface ClosedTradeRecord {
+	baseId: string;
+	coin: string;
+	isBuy: boolean;
+	leverage?: number;
+	marginUsd?: number;
+	portfolioId?: string;
+	portfolioTitle?: string;
+	ownerUsername?: string;
+	entryPrice?: number;
+	closingPrice?: number;
+	openedAt?: string;
+	closedAt: string;
+	closeReason: string;
 }
 
 /**

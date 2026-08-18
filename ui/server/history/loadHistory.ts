@@ -2,10 +2,11 @@ import "server-only";
 import type { ClosedInvestment } from "@daemon/types.js";
 import { readTrackedState } from "../daemon/readState";
 import { readIgnoredTrades } from "../daemon/readIgnored";
+import { readClosedTrades } from "../daemon/readClosedTrades";
 import { readLogEvents } from "../daemon/readLogs";
 import { getInvoClient } from "../invo/client";
 import { getHyperliquidClient } from "../hyperliquid/client";
-import { staleWhileRevalidate } from "../staleWhileRevalidate";
+import { staleWhileRevalidate, keyedStaleWhileRevalidate } from "../staleWhileRevalidate";
 import { buildTradeHistory, GENERIC_CLOSE_REASON, UNATTRIBUTED_CLOSE_REASON, FILL_MATCH_TOLERANCE_MS } from "./buildTradeHistory";
 import type { TradeHistoryEntry } from "@/types/ui";
 
@@ -20,14 +21,16 @@ async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
 	// with the (slower) Invo followed-portfolios call, instead of after it.
 	const hlUserFillsPromise = hlClientPromise.then((hl) => hl.getUserFills().catch(() => []));
 
-	const [, state, ignored, logEvents, portfolios, hlUserFills] = await Promise.all([
+	const [, state, ignored, closedTrades, logEvents, portfolios, hlUserFills] = await Promise.all([
 		hlClientPromise,
 		Promise.resolve(readTrackedState()),
 		Promise.resolve(readIgnoredTrades()),
+		Promise.resolve(readClosedTrades()),
 		Promise.resolve(readLogEvents(Date.now() - HISTORY_WINDOW_MS)),
 		invo.getFollowedPortfolios(),
 		hlUserFillsPromise,
 	]);
+	const closedTradesByBaseId = new Map(closedTrades.map((t) => [t.baseId, t]));
 
 	// Deliberately no per-portfolio getOpenInvestments/getClosedInvestments
 	// fetch here - see buildTradeHistory's GENERIC_CLOSE_REASON doc. Those
@@ -41,13 +44,31 @@ async function fetchHistory(): Promise<{ trades: TradeHistoryEntry[] }> {
 	// to need it. loadHistoryPage below fetches this per-portfolio fallback
 	// lazily, only for the specific handful of portfolios a given page's
 	// GENERIC_CLOSE_REASON entries actually need.
-	const trades = buildTradeHistory({ state, ignored, logEvents, portfolios, hlUserFills });
+	const trades = buildTradeHistory({ state, ignored, logEvents, portfolios, hlUserFills, closedTradesByBaseId });
 
 	return { trades };
 }
 
 /** Shared + stale-while-revalidate across /api/history, both history pages' SSR fetch, and loadAnalytics - keeps list/detail baseIds consistent and never blocks navigation on a live Invo/HL round trip after the first load. */
 export const loadHistory = staleWhileRevalidate(fetchHistory, CACHE_TTL_MS);
+
+/**
+ * Both enrichment paths below hit the same "closed investments for portfolio
+ * X" endpoint - without a shared cache, every page a user pages into that
+ * still has GENERIC_/UNATTRIBUTED_CLOSE_REASON entries (common for anything
+ * predating this daemon's own log/state trail) re-fetches it from scratch,
+ * per portfolio, on every single "Load more" click. Keyed by portfolioId so
+ * unrelated pages' enrichment reuses the same in-flight/cached result instead
+ * of each paying its own round trip.
+ */
+const loadClosedInvestments = keyedStaleWhileRevalidate(
+	(portfolioId: string) => getInvoClient().getClosedInvestments(portfolioId, 1, 30).catch(() => []),
+	CACHE_TTL_MS,
+);
+const loadFollowedPortfoliosForEnrichment = staleWhileRevalidate(
+	() => getInvoClient().getFollowedPortfolios().catch(() => []),
+	CACHE_TTL_MS,
+);
 
 /**
  * Real per-page lazy loading: fills in the one thing the cheap build above
@@ -95,14 +116,13 @@ export async function enrichHistoryPage(page: TradeHistoryEntry[]): Promise<Trad
 
 	if (genericEntries.length === 0 && unattributedEntries.length === 0) return page;
 
-	const invo = getInvoClient();
 	const closedByBaseId = new Map<string, ClosedInvestment>();
 	const matchByTradeBaseId = new Map<string, ClosedInvestment>();
 
 	const portfolioIdsNeeded = new Set(genericEntries.map((t) => t.portfolioId as string));
 	const genericFetch = Promise.all(
 		[...portfolioIdsNeeded].map(async (portfolioId) => {
-			const closed = await invo.getClosedInvestments(portfolioId, 1, 30).catch(() => []);
+			const closed = await loadClosedInvestments(portfolioId);
 			for (const inv of closed) closedByBaseId.set(inv.baseId, inv);
 		}),
 	);
@@ -110,21 +130,16 @@ export async function enrichHistoryPage(page: TradeHistoryEntry[]): Promise<Trad
 	const crossRefFetch =
 		unattributedEntries.length === 0
 			? Promise.resolve()
-			: invo
-					.getFollowedPortfolios()
-					.catch(() => [])
-					.then(async (portfolios) => {
-						const allClosed = (
-							await Promise.all(portfolios.map((p) => invo.getClosedInvestments(p.id, 1, 30).catch(() => [])))
-						).flat();
-						for (const t of unattributedEntries) {
-							const tMs = Date.parse(t.closedAt as string);
-							const candidates = allClosed.filter(
-								(inv) => inv.ticker === t.coin && inv.directionLong === t.isBuy && Math.abs(Date.parse(inv.closedAt) - tMs) <= FILL_MATCH_TOLERANCE_MS,
-							);
-							if (candidates.length === 1) matchByTradeBaseId.set(t.baseId, candidates[0]);
-						}
-					});
+			: loadFollowedPortfoliosForEnrichment().then(async (portfolios) => {
+					const allClosed = (await Promise.all(portfolios.map((p) => loadClosedInvestments(p.id)))).flat();
+					for (const t of unattributedEntries) {
+						const tMs = Date.parse(t.closedAt as string);
+						const candidates = allClosed.filter(
+							(inv) => inv.ticker === t.coin && inv.directionLong === t.isBuy && Math.abs(Date.parse(inv.closedAt) - tMs) <= FILL_MATCH_TOLERANCE_MS,
+						);
+						if (candidates.length === 1) matchByTradeBaseId.set(t.baseId, candidates[0]);
+					}
+				});
 
 	await Promise.all([genericFetch, crossRefFetch]);
 

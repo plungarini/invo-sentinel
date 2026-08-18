@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Tabs from "@/components/shared/Tabs";
 import Button from "@/components/shared/Button";
-import BalanceCard from "@/components/wallet/BalanceCard";
+import TotalBalanceCard from "@/components/shared/TotalBalanceCard";
 import OpenPositionsTable from "@/components/wallet/OpenPositionsTable";
 import PositionSortChip from "@/components/wallet/PositionSortChip";
 import { usePositionSort } from "@/hooks/usePositionSort";
@@ -17,7 +17,6 @@ import { useTransfers } from "@/hooks/useTransfers";
 import { useTradeHistoryPage } from "@/hooks/useTradeHistoryPage";
 import { useHistoryFeesTotal } from "@/hooks/useHistoryFeesTotal";
 import { useTradeByBaseId } from "@/hooks/useTradeByBaseId";
-import { formatUsd } from "@/lib/format";
 
 const TABS = ["Open", "History", "Transfers"] as const;
 
@@ -51,7 +50,7 @@ export default function WalletClient({ initialData }: { initialData?: WalletResp
 		isLoadingMore: historyLoadingMore,
 		error: historyError,
 	} = useTradeHistoryPage(visitedTabs.has("History"));
-	const { data: feesData } = useHistoryFeesTotal(visitedTabs.has("History"));
+	const { data: feesData } = useHistoryFeesTotal();
 
 	const selectedBaseId = searchParams.get("trade");
 	const selectedTradeFromPage = selectedBaseId ? historyTrades.find((t) => t.baseId === selectedBaseId) : undefined;
@@ -73,9 +72,10 @@ export default function WalletClient({ initialData }: { initialData?: WalletResp
 	return (
 		<div className="flex h-full min-h-0 flex-col pt-14 md:pt-0">
 			<div className="shrink-0">
-				<BalanceCard
+				<TotalBalanceCard
 					accountValueUsd={data.accountValueUsd}
-					feesLabel={feesData != null && feesData.totalFeesUsd > 0 ? `${formatUsd(feesData.totalFeesUsd)} fees` : undefined}
+					availableUsd={data.accountValueUsd - data.positions.reduce((sum, p) => sum + parseFloat(p.marginUsed), 0)}
+					feesUsd={feesData?.totalFeesUsd}
 				/>
 				<div className="flex items-center justify-between pb-4 pt-3">
 					<Tabs tabs={TABS} active={tab} onChange={changeTab} />

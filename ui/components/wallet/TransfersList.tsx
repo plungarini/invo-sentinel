@@ -14,11 +14,25 @@ const FIXED_LABEL_BY_TYPE: Record<string, string> = {
 	vaultWithdraw: "Vault withdrawal",
 };
 
+// Hyperliquid's ledger API carries no chain/network field. A non-native-chain
+// deposit (e.g. Solana) never shows up as `type: "deposit"` at all - it gets
+// routed through a fixed relayer address and lands as an ordinary internal
+// `send`/`receive`, structurally identical to a genuine peer-to-peer transfer
+// except for the sender address. Hardcoded from one confirmed sample
+// (2026-08-17, Invo's Solana deposit path) - unofficial API, no docs for this,
+// so if Invo/HL ever rotates the relayer, entries routed through the new
+// address just read as "Received" again until this map is updated.
+const KNOWN_DEPOSIT_RELAYERS: Record<string, string> = {
+	"0x6b9e773128f453f5c2c60935ee2de2cbc5390a24": "Solana",
+};
+
 // Everything else (send/receive/internalTransfer/accountClassTransfer/...) describes
 // a transfer whose direction is only knowable from the real signed value, so the
 // label follows that sign rather than the static type name.
-function labelFor(type: string, isIncoming: boolean, isOutgoing: boolean): string {
+function labelFor(type: string, isIncoming: boolean, isOutgoing: boolean, senderAddress?: string): string {
 	if (FIXED_LABEL_BY_TYPE[type]) return FIXED_LABEL_BY_TYPE[type];
+	const relayerNetwork = isIncoming && senderAddress ? KNOWN_DEPOSIT_RELAYERS[senderAddress.toLowerCase()] : undefined;
+	if (relayerNetwork) return `Deposit (${relayerNetwork})`;
 	if (isIncoming) return "Received";
 	if (isOutgoing) return "Sent";
 	return type;
@@ -37,7 +51,7 @@ export default function TransfersList({ transfers }: { transfers: HyperliquidLed
 		<div className="flex flex-col gap-2.5">
 			{transfers.map((t) => {
 				const type = t.delta.type;
-				const amount = t.delta.usdcValue ?? t.delta.amount;
+				const amount = t.delta.usdcValue ?? t.delta.amount ?? t.delta.usdc;
 				const parsedAmount = amount != null ? parseFloat(amount) : null;
 
 				// Sign of the actual value is ground truth for direction - the
@@ -60,7 +74,9 @@ export default function TransfersList({ transfers }: { transfers: HyperliquidLed
 							<Icon className="h-[18px] w-[18px]" strokeWidth={2.25} />
 						</span>
 						<div className="min-w-0 flex-1">
-							<p className="text-[15px] font-semibold">{labelFor(type, isIncoming, isOutgoing)}</p>
+							<p className="text-[15px] font-semibold">
+								{labelFor(type, isIncoming, isOutgoing, t.delta.user)}
+							</p>
 							<p className="text-[13px] text-text-muted">{timeAgo(t.time)}</p>
 						</div>
 						<span className={`shrink-0 text-[16px] font-bold tabular-nums ${amountClass}`}>

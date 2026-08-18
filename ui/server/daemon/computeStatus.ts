@@ -1,6 +1,6 @@
 import { readLogEvents } from "./readLogs.js";
 
-const RECENT_ERROR_WINDOW_MS = 2 * 60 * 60 * 1000;
+const RECENT_ACTIVITY_WINDOW_MS = 2 * 60 * 60 * 1000;
 const CYCLE_EVENT_TYPES = new Set(["cycle_start", "cycle_checkpoint", "cycle_complete"]);
 const ACTIVITY_EVENT_TYPES = new Set([
 	"opened",
@@ -21,13 +21,6 @@ export interface CycleStatus {
 	lastCompleteDurationMs: number | null;
 }
 
-export interface RecentError {
-	ts: string;
-	type: string;
-	source?: string;
-	message?: string;
-}
-
 export interface RecentActivityEntry {
 	ts: string;
 	type: string;
@@ -37,15 +30,13 @@ export interface RecentActivityEntry {
 
 export function readLatestCycleStatus(): {
 	cycle: CycleStatus;
-	recentErrors: RecentError[];
 	recentActivity: RecentActivityEntry[];
 } {
-	const since = Date.now() - RECENT_ERROR_WINDOW_MS;
+	const since = Date.now() - RECENT_ACTIVITY_WINDOW_MS;
 	const events = readLogEvents(since);
 
 	let latestCycleEvent: Record<string, unknown> | null = null;
 	let latestComplete: Record<string, unknown> | null = null;
-	const recentErrors: RecentError[] = [];
 	const recentActivity: RecentActivityEntry[] = [];
 
 	for (const e of events) {
@@ -62,15 +53,6 @@ export function readLatestCycleStatus(): {
 			}
 		}
 
-		if (type === "error" || type === "fatal") {
-			recentErrors.push({
-				ts,
-				type,
-				source: e.source as string | undefined,
-				message: (e.message as string | undefined) ?? undefined,
-			});
-		}
-
 		if (ACTIVITY_EVENT_TYPES.has(type)) {
 			recentActivity.push({
 				ts,
@@ -81,7 +63,6 @@ export function readLatestCycleStatus(): {
 		}
 	}
 
-	recentErrors.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
 	recentActivity.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
 
 	return {
@@ -91,7 +72,6 @@ export function readLatestCycleStatus(): {
 			lastCompleteTs: (latestComplete?.ts as string) ?? null,
 			lastCompleteDurationMs: (latestComplete?.durationMs as number) ?? null,
 		},
-		recentErrors: recentErrors.slice(0, 20),
 		recentActivity: recentActivity.slice(0, 12),
 	};
 }

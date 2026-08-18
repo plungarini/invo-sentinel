@@ -6,6 +6,9 @@ import { loadConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
+import { ClosedTradesStore } from '../services/closed-trades-store.js';
+import { CycleFillsCache } from '../services/cycle-fills-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
@@ -74,10 +77,17 @@ async function main() {
 	await hl.connect();
 
 	const meta = await hl.getMeta();
-	const stateStore = new StateStore(join(ROOT_DIR, 'data/.copy-state.json'), log);
-	const ignoredStore = new IgnoredTradesStore(join(ROOT_DIR, 'data/.copy-ignored.json'), log);
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const stateStore = new StateStore(dbPath, log);
+	const ignoredStore = new IgnoredTradesStore(dbPath, log);
+	// Deliberately still JSON, not SQLite - the one user-hand-edited store
+	// (see portfolio-risk-store.ts); keeping it a plain file means the user
+	// can open and edit it directly, same as today.
 	const portfolioRiskStore = new PortfolioRiskStore(join(ROOT_DIR, 'data/.copy-portfolio-risk.json'), log);
-	const followedPortfoliosStore = new FollowedPortfoliosStore(join(ROOT_DIR, 'data/.copy-followed-portfolios.json'), log);
+	const followedPortfoliosStore = new FollowedPortfoliosStore(dbPath, log);
+	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
+	const closedTradesStore = new ClosedTradesStore(dbPath, log);
+	const cycleFillsCache = new CycleFillsCache(hl);
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -85,16 +95,21 @@ async function main() {
 		staleEntry: config.staleEntry,
 		dryRun,
 		assetMeta: meta.universe,
+		getFillsOnce: () => cycleFillsCache.getOnce(),
+		closedTrades: closedTradesStore,
 	});
 	const poller = new PortfolioPoller(invo, log);
 	const reconciler = new Reconciler(
 		poller,
 		sync,
 		hl,
+		invo,
 		stateStore,
 		ignoredStore,
 		portfolioRiskStore,
 		followedPortfoliosStore,
+		cloidAttributionStore,
+		cycleFillsCache,
 		config.risk,
 		log,
 	);
@@ -115,7 +130,13 @@ async function main() {
 	});
 
 	pingStart(config.healthcheckPingUrl, log);
-	let { followedPortfolioCount } = await reconciler.run();
+	const first = await reconciler.run();
+	// null only when the cycle was skipped for a transient, self-recovering
+	// rate limit (see reconciler.ts) - keep the last known counts rather
+	// than resetting to 0, which would undo poll-schedule.ts's throttle
+	// right when it's most needed (immediately after a rate limit).
+	let followedPortfolioCount = first.followedPortfolioCount ?? 0;
+	let adHocPortfolioCount = first.adHocPortfolioCount ?? 0;
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 
@@ -124,14 +145,17 @@ async function main() {
 		// that the configured pollIntervalMs alone would exceed Invo's own
 		// Cloudflare rate limit (500 req/300s per IP, confirmed live
 		// 2026-08-11) - see poll-schedule.ts. A no-op at typical follow counts.
-		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs);
+		const extraCallsPerCycle = adHocPortfolioCount; // one get_investments per ad-hoc (manually-mimicked) portfolio
+		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
 		if (delayMs > config.pollIntervalMs) {
-			log({ type: 'poll_interval_throttled', followedPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
+			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
 		}
 		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {
-			({ followedPortfolioCount } = await reconciler.run());
+			const result = await reconciler.run();
+			if (result.followedPortfolioCount != null) followedPortfolioCount = result.followedPortfolioCount;
+			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });

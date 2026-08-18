@@ -37,6 +37,8 @@ export interface PortfolioPnlBreakdown {
 	determinedPnlPercentTradeCount: number;
 }
 
+export type AnalyticsPeriod = "today" | "wtd" | "mtd" | "ytd" | "all";
+
 export interface PnlOverTimePoint {
 	closedAt: string;
 	cumulativePnlUsd: number;
@@ -55,6 +57,8 @@ export interface AnalyticsSummary {
 	determinedPnlTradeCount: number;
 	determinedPnlPercentTradeCount: number;
 	totalPnlUsd: number;
+	/** Unrealized PnL summed across currently-open positions, live from the exchange - not part of `totalPnlUsd`, which is closed trades only. */
+	openPnlUsd: number;
 	totalFeesUsd: number;
 	winRate: number;
 	avgPnlPercent: number;

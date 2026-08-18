@@ -1,6 +1,6 @@
 {
 	"name": "invo-sentinel",
-	"version": "1.8.0",
+	"version": "1.9.0",
 	"description": "Automatic copy trader for Invo followed portfolios, executing on Hyperliquid.",
 	"type": "module",
 	"license": "MIT",
@@ -19,10 +19,12 @@
 		"docs:screenshots": "tsx scripts/screenshot-docs.ts"
 	},
 	"dependencies": {
+		"better-sqlite3": "^13.0.3",
 		"hyperliquid": "^1.7.7",
 		"undici": "^7.29.0"
 	},
 	"devDependencies": {
+		"@types/better-sqlite3": "^9.6.0",
 		"@types/node": "^25.5.2",
 		"dotenv": "^17.4.1",
 		"playwright": "^1.62.1",

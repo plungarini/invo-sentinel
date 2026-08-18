@@ -13,7 +13,7 @@ const INVO_RATE_LIMIT_WINDOW_MS = 300_000;
 // Confirmed live 2026-08-11: this budget is shared with whatever else is on
 // the same IP, including the user's own Invo app usage on the same home
 // network - a genuinely unpredictable, uncontrollable amount of concurrent
-// traffic, not just mimic-resolver calls or other CLI runs. A 0.6 target
+// traffic, not just this daemon's own calls or other CLI runs. A 0.6 target
 // still left the daemon and the user's own live browsing/following
 // competing for the same budget with ~2 hours of zero recovery as a result.
 // Deliberately conservative so there's real headroom left over for that,
@@ -24,10 +24,15 @@ const SAFETY_FACTOR = 0.25;
  * Minimum safe gap between cycle starts given how many portfolios are
  * currently followed - always at least `pollIntervalMs`, but larger once
  * enough portfolios are followed that the naive interval would exceed
- * Invo's own rate limit on its own.
+ * Invo's own rate limit on its own. `extraCallsPerCycle` accounts for
+ * per-cycle calls beyond the followed-portfolios list + one get_investments
+ * per followed portfolio - currently one get_investments per ad-hoc
+ * (manually-mimicked) portfolio; cloid-attribution's own /dex/trade calls
+ * are conditional (only when something is genuinely unexplained) and
+ * batched, so they're not counted as a steady-state cost here.
  */
-export function computeSafePollIntervalMs(followedPortfolioCount: number, pollIntervalMs: number): number {
-	const invoCallsPerCycle = 1 + followedPortfolioCount;
+export function computeSafePollIntervalMs(followedPortfolioCount: number, pollIntervalMs: number, extraCallsPerCycle = 0): number {
+	const invoCallsPerCycle = 1 + followedPortfolioCount + extraCallsPerCycle;
 	const budgetPerMs = (INVO_RATE_LIMIT_PER_WINDOW * SAFETY_FACTOR) / INVO_RATE_LIMIT_WINDOW_MS;
 	const minSafeIntervalMs = Math.ceil(invoCallsPerCycle / budgetPerMs);
 	return Math.max(pollIntervalMs, minSafeIntervalMs);
