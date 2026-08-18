@@ -95,6 +95,7 @@ export default function OpenPositionDetailModal({
 	const stopLossPnlUsd = estimatePnlAt(stopLoss);
 
 	const liqFilledPct = computeLiqFilledPct(entryPx, markPx, liqPx);
+	const liqLossUsd = liqPx != null ? estimatePnlAt(liqPx) : null;
 
 	return (
 		<Modal onClose={onClose} title="Position Details">
@@ -165,6 +166,14 @@ export default function OpenPositionDetailModal({
 						<div className="mb-2 flex items-center justify-between gap-4">
 							<span className="text-[14px] text-text-muted">Liq. Price</span>
 							<span className="text-[15px] font-semibold tabular-nums">{liqPx != null ? formatUsd(liqPx) : "N/A"}</span>
+						</div>
+						<div className="mb-2 flex items-center justify-between gap-4">
+							<span className="text-[14px] text-text-muted" title="Estimated loss if the position closed exactly at its liquidation price.">
+								Liq. Loss
+							</span>
+							<span className="text-[15px] font-semibold tabular-nums text-loss">
+								{liqLossUsd != null ? `-${formatUsd(Math.abs(liqLossUsd))}` : "N/A"}
+							</span>
 						</div>
 						{liqFilledPct != null && (
 							<>
