@@ -12,6 +12,11 @@ function avg(nums: number[]): number {
 	return nums.length > 0 ? nums.reduce((s, n) => s + n, 0) / nums.length : 0;
 }
 
+/** Same closed+determined-PnL filter aggregateAnalytics uses for totalFeesUsd - factored out so the lightweight fees-only endpoint reports the exact same figure without pulling in the rest of the (much heavier) aggregation. */
+export function computeTotalFeesUsd(trades: TradeHistoryEntry[]): number {
+	return trades.filter((t) => t.status === "closed").filter(hasPnlUsd).reduce((sum, t) => sum + (t.feesUsd ?? 0), 0);
+}
+
 /**
  * Pure aggregation over closed trades - no I/O. $-based metrics (total PnL,
  * win rate, equity curve) only need `pnlUsd`, known for every real closed
@@ -31,7 +36,7 @@ export function aggregateAnalytics(trades: TradeHistoryEntry[], openPnlUsd = 0):
 	// Gross trading PnL - HL's closedPnl, not net of fees. Fees are tracked
 	// separately since not every determined-PnL trade has a known fee (older
 	// exchange-only reconstructions may lack it), so this can under-count slightly.
-	const totalFeesUsd = determined.reduce((sum, t) => sum + (t.feesUsd ?? 0), 0);
+	const totalFeesUsd = computeTotalFeesUsd(closed);
 	const wins = determined.filter((t) => t.pnlUsd > 0).length;
 	const winRate = determined.length > 0 ? (wins / determined.length) * 100 : 0;
 	const determinedPercents = determined.map((t) => t.pnlPercent).filter(isNumber);
