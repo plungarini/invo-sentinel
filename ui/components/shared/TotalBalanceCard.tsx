@@ -20,11 +20,11 @@ export default function TotalBalanceCard({
 	size?: 'sm' | 'lg';
 	footer?: ReactNode;
 }) {
-	const stats: { label: string; value: string; icon: typeof DollarSign; tone: 'profit' | 'amber' }[] = [];
+	const stats: { label: string; value: string; icon: typeof DollarSign; tone: 'profit' | 'amber' | 'red' }[] = [];
 	if (availableUsd != null)
 		stats.push({ label: 'Available', value: formatUsd(availableUsd), icon: DollarSign, tone: 'profit' });
 	if (feesUsd != null && feesUsd > 0)
-		stats.push({ label: 'Fees', value: formatUsd(feesUsd), icon: Percent, tone: 'amber' });
+		stats.push({ label: 'Fees', value: formatUsd(feesUsd), icon: Percent, tone: 'red' });
 
 	return (
 		<Card>
@@ -38,16 +38,13 @@ export default function TotalBalanceCard({
 					<BalanceChange24hBadge />
 				</div>
 				{stats.length > 0 && (
-					<>
-						<div className="hidden self-stretch border-l border-border sm:block" />
-						<div className="flex flex-col justify-center w-full gap-2 sm:w-[220px] sm:shrink-0">
-							{stats.map((s) => (
-								<div key={s.label} className="rounded-xl bg-surface-hover px-3 py-2.5">
-									<StatTile label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
-								</div>
-							))}
-						</div>
-					</>
+					<div className="flex flex-col justify-center w-full gap-2 sm:w-[220px] sm:shrink-0">
+						{stats.map((s) => (
+							<div key={s.label} className="rounded-xl bg-surface-hover px-3 py-2.5">
+								<StatTile label={s.label} value={s.value} icon={s.icon} tone={s.tone} />
+							</div>
+						))}
+					</div>
 				)}
 			</div>
 			{footer}
