@@ -189,6 +189,8 @@ export interface HyperliquidLedgerUpdate {
 		usdcValue?: string;
 		amount?: string;
 		token?: string;
+		/** Sender address on a 'send'/'receive' entry - see KNOWN_DEPOSIT_RELAYERS in TransfersList.tsx. */
+		user?: string;
 		[key: string]: unknown;
 	};
 }
