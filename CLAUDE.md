@@ -175,3 +175,6 @@ This repo follows gitflow. There is no remote push/PR workflow expected here - b
 
 - Group by concern and commit each group separately: one commit, one coherent change describable without "and". Split implementation vs. config vs. unrelated fixes into separate commits even if they landed in the same session.
 - When in doubt, more/smaller commits over one lumped commit.
+
+
+

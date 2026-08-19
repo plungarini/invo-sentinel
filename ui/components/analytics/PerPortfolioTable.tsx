@@ -2,18 +2,35 @@
 
 import { useState } from "react";
 import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
+import PortfolioAvatar from "@/components/layout/PortfolioAvatar";
 import type { PortfolioPnlBreakdown } from "@/types/ui";
 import { formatPct, formatUsd } from "@/lib/format";
 
-const AVATAR_TONES = [
-	"bg-accent/20 text-accent",
-	"bg-profit/20 text-profit",
-	"bg-badge-amber/20 text-badge-amber",
-	"bg-loss/20 text-loss",
-];
-
-export default function PerPortfolioTable({ perPortfolio }: { perPortfolio: PortfolioPnlBreakdown[] }) {
+export default function PerPortfolioTable({
+	perPortfolio,
+	hasError,
+}: {
+	perPortfolio?: PortfolioPnlBreakdown[];
+	hasError?: boolean;
+}) {
 	const [query, setQuery] = useState("");
+
+	if (!perPortfolio) {
+		return (
+			<Card title="By Portfolio">
+				{hasError ? (
+					<p className="text-[14px] text-loss">Failed to load analytics.</p>
+				) : (
+					<div className="flex flex-col gap-2.5">
+						{Array.from({ length: 3 }).map((_, i) => (
+							<Skeleton key={i} className="h-[104px] w-full rounded-xl" />
+						))}
+					</div>
+				)}
+			</Card>
+		);
+	}
 
 	if (perPortfolio.length === 0) {
 		return (
@@ -37,17 +54,16 @@ export default function PerPortfolioTable({ perPortfolio }: { perPortfolio: Port
 				{filtered.length === 0 ? (
 					<p className="px-1 py-8 text-center text-[14px] text-text-muted">No portfolios match "{query}".</p>
 				) : (
-					filtered.map((p, i) => {
+					filtered.map((p) => {
 						const hasAvgPercent = p.determinedPnlPercentTradeCount > 0;
 						return (
-							<div key={p.name} className="rounded-xl border border-border bg-surface px-4 py-3.5">
+							<div key={p.portfolioId ?? p.name} className="rounded-xl border border-border bg-surface px-4 py-3.5">
 								<div className="flex items-center gap-3">
-									<span
-										className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${AVATAR_TONES[i % AVATAR_TONES.length]}`}
-									>
-										{p.name.trim().slice(0, 2).toUpperCase()}
-									</span>
-									<span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{p.name}</span>
+									<PortfolioAvatar title={p.name} avatarUrl={p.ownerAvatarUrl} avatarColor={p.ownerAvatarColor} />
+									<div className="flex min-w-0 flex-1 flex-col">
+										<span className="truncate text-[15px] font-semibold leading-tight">{p.name}</span>
+										{p.ownerUsername && <span className="truncate text-[13px] text-text-muted">@{p.ownerUsername}</span>}
+									</div>
 									<div className="flex shrink-0 flex-col items-end">
 										<span className="text-[13px] text-text-muted">Profit / Loss</span>
 										<span

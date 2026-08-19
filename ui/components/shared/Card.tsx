@@ -15,7 +15,7 @@ export default function Card({
 	return (
 		<div className={`rounded-xl ${transparent ? "border border-border bg-transparent" : "bg-card"} p-4 sm:p-5 ${className}`}>
 			{(title || action) && (
-				<div className="mb-4 flex items-center justify-between px-1">
+				<div className="mb-4 flex flex-col gap-3 px-1 sm:flex-row sm:items-center sm:justify-between">
 					{title && <h3 className="text-[17px] font-bold tracking-tight text-text">{title}</h3>}
 					{action}
 				</div>

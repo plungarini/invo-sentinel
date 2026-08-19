@@ -22,30 +22,55 @@ export interface WalletResponse {
  * loop per process (walletBroadcaster.ts) and fans it out to every connected
  * tab, instead of each tab polling HL independently. `fallbackData` (from the
  * page's own SSR fetch) covers the gap before the stream's first message arrives.
+ *
+ * Connection is torn down while the browser tab is hidden and reopened on
+ * return - `subscribeWallet`'s listener count drives whether the server's
+ * poll loop runs at all (see walletBroadcaster.ts), so a backgrounded tab
+ * genuinely stops contributing to Invo/HL request volume instead of just
+ * not rendering the pushes it keeps receiving.
  */
 export function useWallet(fallbackData?: WalletResponse) {
 	const [data, setData] = useState<WalletResponse | undefined>(fallbackData);
 	const [error, setError] = useState<Error | undefined>(undefined);
 
 	useEffect(() => {
-		const es = new EventSource("/api/wallet/stream");
+		let es: EventSource | null = null;
 
-		es.onmessage = (event) => {
-			try {
-				setData(JSON.parse(event.data) as WalletResponse);
-				setError(undefined);
-			} catch {
-				// malformed message - wait for the next push rather than surfacing a transient parse hiccup
+		function connect() {
+			es = new EventSource("/api/wallet/stream");
+
+			es.onmessage = (event) => {
+				try {
+					setData(JSON.parse(event.data) as WalletResponse);
+					setError(undefined);
+				} catch {
+					// malformed message - wait for the next push rather than surfacing a transient parse hiccup
+				}
+			};
+
+			// EventSource auto-reconnects on a dropped connection on its own; only a
+			// fully closed source (e.g. the server rejected the request) is unrecoverable.
+			es.onerror = () => {
+				if (es?.readyState === EventSource.CLOSED) setError(new Error("Wallet stream disconnected"));
+			};
+		}
+
+		function handleVisibilityChange() {
+			if (document.hidden) {
+				es?.close();
+				es = null;
+			} else if (!es) {
+				connect();
 			}
-		};
+		}
 
-		// EventSource auto-reconnects on a dropped connection on its own; only a
-		// fully closed source (e.g. the server rejected the request) is unrecoverable.
-		es.onerror = () => {
-			if (es.readyState === EventSource.CLOSED) setError(new Error("Wallet stream disconnected"));
-		};
+		if (!document.hidden) connect();
+		document.addEventListener("visibilitychange", handleVisibilityChange);
 
-		return () => es.close();
+		return () => {
+			document.removeEventListener("visibilitychange", handleVisibilityChange);
+			es?.close();
+		};
 	}, []);
 
 	return { data, error };

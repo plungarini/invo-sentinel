@@ -30,6 +30,11 @@ export interface TradeHistoryEntry {
 
 export interface PortfolioPnlBreakdown {
 	name: string;
+	/** Absent only when every trade in this group predates portfolio attribution and none was resolvable - falls back to grouping by `name` alone. */
+	portfolioId?: string;
+	ownerUsername?: string;
+	ownerAvatarUrl?: string;
+	ownerAvatarColor?: string;
 	tradeCount: number;
 	winRate: number;
 	totalPnlUsd: number;

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { HyperliquidLedgerUpdate } from "@daemon/types.js";
 import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
 import type { PnlOverTimePoint } from "@/types/ui";
 import { formatUsd } from "@/lib/format";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -112,18 +113,18 @@ function buildTransferMarkers(pnlOverTime: PnlOverTimePoint[], transfers: Hyperl
 export default function PnlOverTimeChart({
 	pnlOverTime,
 	transfers,
-	periodSelector,
+	hasError,
 }: {
-	pnlOverTime: PnlOverTimePoint[];
+	pnlOverTime?: PnlOverTimePoint[];
 	transfers?: HyperliquidLedgerUpdate[];
-	periodSelector?: React.ReactNode;
+	hasError?: boolean;
 }) {
-	const transferMarkers = useMemo(() => buildTransferMarkers(pnlOverTime, transfers), [pnlOverTime, transfers]);
+	const transferMarkers = useMemo(() => buildTransferMarkers(pnlOverTime ?? [], transfers), [pnlOverTime, transfers]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 	// Where the zero-crossing falls in the gradient (0 = top/all-loss, 1 = bottom/all-profit) -
 	// lets the area/line fade from teal to red right at the point the cumulative PnL crosses zero.
 	const zeroOffset = useMemo(() => {
-		const values = pnlOverTime.map((p) => p.cumulativePnlUsd);
+		const values = (pnlOverTime ?? []).map((p) => p.cumulativePnlUsd);
 		const dataMax = Math.max(...values);
 		const dataMin = Math.min(...values);
 		if (dataMax <= 0) return 0;
@@ -131,9 +132,21 @@ export default function PnlOverTimeChart({
 		return dataMax / (dataMax - dataMin);
 	}, [pnlOverTime]);
 
+	if (!pnlOverTime) {
+		return (
+			<Card title="Cumulative PnL">
+				{hasError ? (
+					<p className="text-[14px] text-loss">Failed to load analytics.</p>
+				) : (
+					<Skeleton className="h-72 w-full rounded-xl" />
+				)}
+			</Card>
+		);
+	}
+
 	if (pnlOverTime.length < 2) {
 		return (
-			<Card title="Cumulative PnL" action={periodSelector}>
+			<Card title="Cumulative PnL">
 				<p className="text-sm text-text-muted">Not enough closed trade data in this period for a chart.</p>
 			</Card>
 		);
@@ -145,7 +158,7 @@ export default function PnlOverTimeChart({
 	const tickFontSize = isMobile ? 11 : 12;
 
 	return (
-		<Card title="Cumulative PnL" action={periodSelector}>
+		<Card title="Cumulative PnL">
 			<div className="h-72 w-full">
 				<ResponsiveContainer width="100%" height="100%">
 					<AreaChart data={pnlOverTime} margin={{ top: 20, right: isMobile ? 4 : 12, bottom: 0, left: isMobile ? -14 : -20 }}>
@@ -163,6 +176,7 @@ export default function PnlOverTimeChart({
 						<ReferenceLine y={0} stroke={COLOR_BORDER} />
 						<XAxis
 							dataKey="closedAt"
+							allowDuplicatedCategory={false}
 							stroke={COLOR_BORDER}
 							tick={{ fill: COLOR_TEXT_MUTED, fontSize: tickFontSize }}
 							tickFormatter={formatDate}

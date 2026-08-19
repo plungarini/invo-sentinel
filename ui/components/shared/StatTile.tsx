@@ -1,21 +1,22 @@
-import type { IconProps } from "@/components/icons/Icons";
+import type { IconProps } from '@/components/icons/Icons';
 
 type IconComponent = React.ComponentType<IconProps>;
 
 const ICON_TONES = {
-	neutral: "bg-surface-hover text-text-muted",
-	accent: "bg-accent/15 text-accent",
-	profit: "bg-profit/15 text-profit",
-	loss: "bg-loss/15 text-loss",
-	amber: "bg-badge-amber/15 text-badge-amber",
+	neutral: 'bg-surface-hover text-text-muted',
+	accent: 'bg-accent/15 text-accent',
+	profit: 'bg-profit/15 text-profit',
+	loss: 'bg-loss/15 text-loss',
+	amber: 'bg-badge-amber/15 text-badge-amber',
+	red: 'bg-red-500/15 text-red-500',
 } as const;
 
 export default function StatTile({
 	label,
 	value,
-	valueClassName = "",
+	valueClassName = '',
 	icon: Icon,
-	tone = "neutral",
+	tone = 'neutral',
 	title,
 }: {
 	label: string;

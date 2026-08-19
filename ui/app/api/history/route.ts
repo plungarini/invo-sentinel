@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadHistory, enrichHistoryPage } from "@/server/history/loadHistory";
+import { computeTotalFeesUsd } from "@/server/analytics/aggregateAnalytics";
 
 export const dynamic = "force-dynamic";
 
@@ -8,11 +9,10 @@ export async function GET(request: NextRequest) {
 		const { trades } = await loadHistory();
 		const { searchParams } = new URL(request.url);
 
-		// Cheap total that doesn't require shipping every trade's full lifecycle
-		// to the client just to show a running fee figure next to the balance.
+		// Cheap total - no live HL position fetch, unlike /api/analytics. Shared
+		// by both Overview's and Wallet's Total Balance banner.
 		if (searchParams.get("feesOnly") === "1") {
-			const totalFeesUsd = trades.reduce((sum, t) => sum + (t.feesUsd ?? 0), 0);
-			return NextResponse.json({ totalFeesUsd });
+			return NextResponse.json({ totalFeesUsd: computeTotalFeesUsd(trades) });
 		}
 
 		// Single-trade lookup - the modal's deep-link (?trade=) can point at a

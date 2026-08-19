@@ -2,11 +2,28 @@
 
 import { useState } from "react";
 import Card from "@/components/shared/Card";
+import Skeleton from "@/components/shared/Skeleton";
 import type { CoinPnlBreakdown } from "@/types/ui";
 import { formatUsd } from "@/lib/format";
 
-export default function ByCoinTable({ byCoin }: { byCoin: CoinPnlBreakdown[] }) {
+export default function ByCoinTable({ byCoin, hasError }: { byCoin?: CoinPnlBreakdown[]; hasError?: boolean }) {
 	const [query, setQuery] = useState("");
+
+	if (!byCoin) {
+		return (
+			<Card title="By Coin">
+				{hasError ? (
+					<p className="text-[14px] text-loss">Failed to load analytics.</p>
+				) : (
+					<div className="flex flex-col gap-2.5">
+						{Array.from({ length: 3 }).map((_, i) => (
+							<Skeleton key={i} className="h-[52px] w-full rounded-xl" />
+						))}
+					</div>
+				)}
+			</Card>
+		);
+	}
 
 	if (byCoin.length === 0) {
 		return (
