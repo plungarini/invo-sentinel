@@ -176,6 +176,7 @@ export default function PnlOverTimeChart({
 						<ReferenceLine y={0} stroke={COLOR_BORDER} />
 						<XAxis
 							dataKey="closedAt"
+							allowDuplicatedCategory={false}
 							stroke={COLOR_BORDER}
 							tick={{ fill: COLOR_TEXT_MUTED, fontSize: tickFontSize }}
 							tickFormatter={formatDate}
