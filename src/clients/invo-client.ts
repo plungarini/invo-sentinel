@@ -64,6 +64,95 @@ export interface RecordClosePayload {
 	summary: { qtyBefore: string; qtyAfter: string };
 }
 
+/** Invo's own paper-trading APIs can 200 OK with `success:false` and this shape - checked explicitly, never inferred from HTTP status alone. */
+interface InvoApiError {
+	msg: string;
+	code: string | null;
+	data: unknown;
+	failedInvestments: unknown;
+}
+
+export interface GetInvestmentsSimsResponse {
+	success: boolean;
+	portfolioRemainingSim: number | null;
+	portfolioTotalFeeSim: number | null;
+	investments: unknown[];
+	error: InvoApiError | null;
+}
+
+export interface CreateTickerInvestmentPayload {
+	ticker: string;
+	portfolioId: string;
+	directionLong: boolean;
+	entrySim: number;
+	priceTarget: number | null;
+	stopLoss: number | null;
+	leverage: number;
+	liquidationPrice: number | null;
+}
+
+export interface CreateTickerInvestmentResponse {
+	success: boolean;
+	baseIds: string[];
+	remainingSim: number | null;
+	error: InvoApiError | null;
+}
+
+export interface ModifyTickerInvestmentPayload {
+	baseId: string;
+	name: string | null;
+	willAutoClose: boolean;
+	simDifference: number;
+	simIncrease: boolean;
+	directionLong: boolean | null;
+	priceTarget: number | null;
+	priceTargetCurrency: string | null;
+	stopLoss: number | null;
+	liquidationPrice: number | null;
+	holdTimeUnit: string | null;
+	minHoldTime: number | null;
+	maxHoldTime: number | null;
+	notes: string | null;
+}
+
+export interface ModifyTickerInvestmentResponse {
+	success: boolean;
+	error: InvoApiError | null;
+	remainingSim: number | null;
+	investmentId: string | null;
+	postId: string | null;
+}
+
+export interface SellInvestmentPayload {
+	baseId: string;
+	customClosingPrice: number | null;
+}
+
+export interface SellInvestmentResponse {
+	success: boolean;
+	error: InvoApiError | null;
+	postId: string | null;
+	remainingSim: number | null;
+	closingPrice: number | null;
+	feeSim: number | null;
+}
+
+export interface RepostInvestmentPayload {
+	baseId: string;
+	userTags: string[] | null;
+	content: string;
+	isUpdate: boolean;
+	isPrivateIfUserPrivate: boolean;
+	showUpdateChanges: unknown;
+	inMonetizePackage: unknown;
+}
+
+export interface RepostInvestmentResponse {
+	success: boolean;
+	error: string | null;
+	postId: string | null;
+}
+
 function sleep(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -122,6 +211,11 @@ export class InvoClient {
 		const raw = (this.accessToken || this.refreshToken).replace('Bearer ', '');
 		const payload = JSON.parse(atob(raw.split('.')[1]));
 		return payload.user_id;
+	}
+
+	/** Public wrapper for Trader-mode's portfolio-ownership check (settings-page `verifyTraderModePortfolio`) - everything else here only needs this internally. */
+	getOwnUserId(): string {
+		return this.getUserId();
 	}
 
 	private async refreshAccessToken(): Promise<boolean> {
@@ -306,5 +400,32 @@ export class InvoClient {
 
 	async recordClose(payload: RecordClosePayload): Promise<any> {
 		return this.post('/dex/position/close', payload);
+	}
+
+	/**
+	 * Trader mode only (see TraderModeConfig/trader-mode-sync.ts) - the
+	 * user's own portfolio, distinct from any followed trader's. Response's
+	 * `portfolioRemainingSim` is the only balance figure this endpoint
+	 * exposes for a portfolio (no "total" balance field observed), so it's
+	 * the base trader-mode sizing scales against - see trader-mode-policy.ts.
+	 */
+	async getInvestmentsSims(portfolioId: string): Promise<GetInvestmentsSimsResponse> {
+		return this.post('/v1_0/investments/get_investments_sims', { portfolioId });
+	}
+
+	async createTickerInvestment(payload: CreateTickerInvestmentPayload): Promise<CreateTickerInvestmentResponse> {
+		return this.post('/v1_0/investments/ticker/create', payload);
+	}
+
+	async modifyTickerInvestment(payload: ModifyTickerInvestmentPayload): Promise<ModifyTickerInvestmentResponse> {
+		return this.post('/v1_0/investments/ticker/modify', payload);
+	}
+
+	async sellInvestment(payload: SellInvestmentPayload): Promise<SellInvestmentResponse> {
+		return this.post('/v1_0/investments/sell', payload);
+	}
+
+	async repostInvestment(payload: RepostInvestmentPayload): Promise<RepostInvestmentResponse> {
+		return this.post('/v1_0/posts/repost_investment', payload);
 	}
 }

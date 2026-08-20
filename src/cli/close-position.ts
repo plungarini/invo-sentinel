@@ -1,6 +1,8 @@
 import { join } from 'path';
 import { HyperliquidClient, extractAvgFillPrice, orderFillError } from '../clients/hyperliquid-client.js';
+import { InvoClient } from '../clients/invo-client.js';
 import { loadConfig } from '../config/env.js';
+import { TraderModeSync } from '../core/trader-mode-sync.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { ConfigStore } from '../services/config-store.js';
 import { createLogger } from '../services/logger.js';
@@ -59,11 +61,14 @@ async function main() {
 
 	const stateStore = new StateStore(join(ROOT_DIR, 'data/sentinel.db'), log);
 	const closedTradesStore = new ClosedTradesStore(join(ROOT_DIR, 'data/sentinel.db'), log);
+	const invo = new InvoClient(config.invoRefreshToken);
+	const traderModeSync = new TraderModeSync({ invo, log, dryRun: false });
 	const state = stateStore.load();
 	const clearedBaseIds = Object.keys(state).filter((baseId) => state[baseId].coin === coin);
 	const closingPrice = extractAvgFillPrice(closeResult);
 	for (const baseId of clearedBaseIds) {
 		const entry = state[baseId];
+		await traderModeSync.mirrorClose(baseId, entry, config.traderMode, closingPrice);
 		closedTradesStore.record({
 			baseId,
 			coin: entry.coin,
