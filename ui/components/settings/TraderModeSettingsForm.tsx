@@ -1,7 +1,6 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
-import Button from "@/components/shared/Button";
 import { saveTraderModeSettings, type ActionState } from "@/app/settings/actions";
 import type { TraderModeFormValues } from "@/server/daemon/settings";
 import Field from "./Field";
@@ -58,13 +57,12 @@ export default function TraderModeSettingsForm({ defaultValues }: { defaultValue
 				</div>
 			</div>
 
-			<div className="flex flex-col gap-3 border-t border-border pt-5">
-				{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
-				{state.ok && <p className="text-[13px] text-profit">Saved.</p>}
-				<Button type="submit" variant="primary" disabled={pending} className="self-start">
-					{pending ? "Saving..." : "Save Trader mode settings"}
-				</Button>
-			</div>
+			{(state.error || state.ok) && (
+				<div className="flex flex-col gap-3 border-t border-border pt-5">
+					{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
+					{state.ok && <p className="text-[13px] text-profit">Saved.</p>}
+				</div>
+			)}
 		</form>
 	);
 }

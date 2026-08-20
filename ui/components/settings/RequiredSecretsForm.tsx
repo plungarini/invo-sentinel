@@ -1,7 +1,6 @@
 "use client";
 
 import { useActionState, useRef } from "react";
-import Button from "@/components/shared/Button";
 import { saveRequiredSecrets, type ActionState } from "@/app/settings/actions";
 import SecretField from "./SecretField";
 import { useAutoSaveForm } from "./useAutoSaveForm";
@@ -25,19 +24,11 @@ function hasTypedValue(formData: FormData): boolean {
 export default function RequiredSecretsForm({
 	maskedHints,
 	walletAddress = "",
-	submitLabel = "Save credentials",
-	onSaved,
 }: {
 	maskedHints?: { invoRefreshToken: string; hlAgentKey: string };
 	walletAddress?: string;
-	submitLabel?: string;
-	onSaved?: () => void;
 }) {
-	const [state, formAction, pending] = useActionState(async (prev: ActionState, formData: FormData) => {
-		const result = await saveRequiredSecrets(prev, formData);
-		if (result.ok) onSaved?.();
-		return result;
-	}, INITIAL_STATE);
+	const [state, formAction, pending] = useActionState(saveRequiredSecrets, INITIAL_STATE);
 
 	const editing = !!maskedHints;
 	const formRef = useRef<HTMLFormElement>(null);
@@ -72,10 +63,7 @@ export default function RequiredSecretsForm({
 			/>
 
 			{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
-
-			<Button type="submit" variant="primary" disabled={pending} className="self-start">
-				{pending ? "Verifying..." : submitLabel}
-			</Button>
+			{pending && <p className="text-[13px] text-text-faint">Verifying...</p>}
 		</form>
 	);
 }
