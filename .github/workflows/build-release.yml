@@ -62,7 +62,7 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Cache bun install cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('package-lock.json') }}
@@ -70,7 +70,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-bun-
 
       - name: Cache Next.js build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ui/.next/cache
           key: ${{ runner.os }}-${{ runner.arch }}-nextjs-${{ hashFiles('ui/package-lock.json') }}
