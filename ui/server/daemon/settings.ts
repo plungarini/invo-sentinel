@@ -1,5 +1,6 @@
 import "server-only";
 import { loadConfig } from "@daemon/config/env.js";
+import { APP_VERSION } from "@daemon/version.js";
 import { getConfigStore } from "./paths";
 
 export interface RequiredSecretsFormValues {
@@ -35,6 +36,15 @@ export interface TraderModeFormValues {
 export interface EmergencyFormValues {
 	noNewPositions: boolean;
 	fullStop: boolean;
+}
+
+export interface UpdateFormValues {
+	autoUpdate: boolean;
+	/** Baked into this running process at build time - never stale relative to what's actually deployed, unlike a DB-stored value would be. */
+	currentVersion: string;
+	/** Last result the daemon's own update-checker saw, persisted so this page never makes its own GitHub call - see auto-copy.ts's comment on why. Null until the daemon has checked at least once. */
+	lastCheckedAt: string | null;
+	latestVersionSeen: string | null;
 }
 
 /** Gate for the first-run setup wizard - DB rows only, never `.env`, so an existing Pi/Docker `.env`-only deployment never sees an unnecessary wizard. */
@@ -88,8 +98,10 @@ export async function getSettingsFormValues(): Promise<{
 	tuning: TuningFormValues;
 	traderMode: TraderModeFormValues;
 	emergency: EmergencyFormValues;
+	update: UpdateFormValues;
 }> {
 	const config = await loadConfig(getConfigStore());
+	const stored = getConfigStore().load();
 	return {
 		secrets: {
 			invoRefreshToken: maskSecret(config.invoRefreshToken),
@@ -119,6 +131,12 @@ export async function getSettingsFormValues(): Promise<{
 		emergency: {
 			noNewPositions: config.emergency.noNewPositions,
 			fullStop: config.emergency.fullStop,
+		},
+		update: {
+			autoUpdate: config.update.autoUpdate,
+			currentVersion: APP_VERSION,
+			lastCheckedAt: stored.updateLastCheckedAt ?? null,
+			latestVersionSeen: stored.updateLatestVersionSeen ?? null,
 		},
 	};
 }

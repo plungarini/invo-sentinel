@@ -4,13 +4,14 @@ import RequiredSecretsForm from "@/components/settings/RequiredSecretsForm";
 import TuningSettingsForm from "@/components/settings/TuningSettingsForm";
 import TraderModeSettingsForm from "@/components/settings/TraderModeSettingsForm";
 import EmergencySettingsForm from "@/components/settings/EmergencySettingsForm";
+import UpdateSettingsForm from "@/components/settings/UpdateSettingsForm";
 import CredentialInstructions from "@/components/settings/CredentialInstructions";
 import { getSettingsFormValues } from "@/server/daemon/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-	const { secrets, tuning, traderMode, emergency } = await getSettingsFormValues();
+	const { secrets, tuning, traderMode, emergency, update } = await getSettingsFormValues();
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
@@ -53,6 +54,10 @@ export default async function SettingsPage() {
 						an unrelated page re-render (e.g. saving the Tuning form) leaves this
 						key untouched, so in-progress edits here aren't lost either. */}
 						<TraderModeSettingsForm key={JSON.stringify(traderMode)} defaultValues={traderMode} />
+					</Card>
+
+					<Card title="Updates">
+						<UpdateSettingsForm key={JSON.stringify(update)} defaultValues={update} />
 					</Card>
 				</div>
 			</div>
