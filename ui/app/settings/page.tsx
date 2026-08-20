@@ -5,6 +5,7 @@ import TuningSettingsForm from "@/components/settings/TuningSettingsForm";
 import TraderModeSettingsForm from "@/components/settings/TraderModeSettingsForm";
 import EmergencySettingsForm from "@/components/settings/EmergencySettingsForm";
 import UpdateSettingsForm from "@/components/settings/UpdateSettingsForm";
+import UpdateCheckCard from "@/components/settings/UpdateCheckCard";
 import CredentialInstructions from "@/components/settings/CredentialInstructions";
 import { getSettingsFormValues } from "@/server/daemon/settings";
 
@@ -57,7 +58,14 @@ export default async function SettingsPage() {
 					</Card>
 
 					<Card title="Updates">
-						<UpdateSettingsForm key={JSON.stringify(update)} defaultValues={update} />
+						<UpdateCheckCard
+							currentVersion={update.currentVersion}
+							latestVersionSeen={update.latestVersionSeen}
+							lastCheckedAt={update.lastCheckedAt}
+						/>
+						<div className="mt-6 border-t border-border pt-5">
+							<UpdateSettingsForm key={JSON.stringify(update)} defaultValues={update} />
+						</div>
 					</Card>
 				</div>
 			</div>

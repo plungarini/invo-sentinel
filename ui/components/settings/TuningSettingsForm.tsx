@@ -1,7 +1,6 @@
 'use client';
 
 import { saveTuningSettings, type ActionState } from '@/app/settings/actions';
-import Button from '@/components/shared/Button';
 import type { TuningFormValues } from '@/server/daemon/settings';
 import { useActionState, useRef, useState } from 'react';
 import Field from './Field';
@@ -101,18 +100,17 @@ export default function TuningSettingsForm({ defaultValues }: { defaultValues: T
 				</div>
 			</div>
 
-			<div className="flex flex-col gap-3 border-t border-border pt-5">
-				{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
-				{state.ok && (
-					<p className="text-[13px] text-profit">
-						Saved. Takes effect on the next reconcile cycle - a margin band change resizes open positions with real
-						orders on the exchange, not just new trades.
-					</p>
-				)}
-				<Button type="submit" variant="primary" disabled={pending} className="self-start">
-					{pending ? 'Saving...' : 'Save settings'}
-				</Button>
-			</div>
+			{(state.error || state.ok) && (
+				<div className="flex flex-col gap-3 border-t border-border pt-5">
+					{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
+					{state.ok && (
+						<p className="text-[13px] text-profit">
+							Saved. Takes effect on the next reconcile cycle - a margin band change resizes open positions with real
+							orders on the exchange, not just new trades.
+						</p>
+					)}
+				</div>
+			)}
 		</form>
 	);
 }

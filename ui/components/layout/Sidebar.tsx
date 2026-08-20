@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAV_LINKS, isNavLinkActive } from "./navLinks";
 
-export default function Sidebar() {
+export default function Sidebar({ version }: { version: string }) {
 	const pathname = usePathname();
 
 	return (
@@ -34,6 +34,8 @@ export default function Sidebar() {
 					);
 				})}
 			</nav>
+
+			<span className="mt-auto hidden py-3 pl-4 text-[15px] font-medium text-text-faint xl:block">v{version}</span>
 		</aside>
 	);
 }

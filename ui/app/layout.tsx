@@ -6,6 +6,7 @@ import RightRail from "@/components/layout/RightRail";
 import ServiceWorkerRegister from "@/components/layout/ServiceWorkerRegister";
 import SetupWizard from "@/components/settings/SetupWizard";
 import { getWizardPrefill, shouldShowSetupWizard } from "@/server/daemon/settings";
+import { APP_VERSION } from "@daemon/version.js";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -56,7 +57,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 					<SetupWizard prefill={wizardPrefill} />
 				) : (
 					<div className="mx-auto flex h-screen max-w-[1440px] overflow-hidden">
-						<Sidebar />
+						<Sidebar version={APP_VERSION} />
 						<main className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 sm:px-6 md:pt-6">
 							<div className="mx-auto flex h-full min-h-0 w-full max-w-[760px] flex-col">{children}</div>
 						</main>
