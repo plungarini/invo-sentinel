@@ -125,6 +125,10 @@ export async function loadConfig(
 		staleEntry: {
 			maxAgeMinutes: parseFloat(readValue(stored, 'staleEntryMaxAgeMinutes', 'STALE_ENTRY_MAX_AGE_MINUTES')) || 1,
 			maxProfitPct: parseFloat(readValue(stored, 'staleEntryMaxProfitPct', 'STALE_ENTRY_MAX_PROFIT_PCT')) || 1,
+			// Absence (no DB row, no env var) means on - these guardrails default
+			// to enabled, so only an explicit 'false' turns either off.
+			maxAgeEnabled: readValue(stored, 'staleEntryMaxAgeEnabled', 'STALE_ENTRY_MAX_AGE_ENABLED') !== 'false',
+			maxProfitEnabled: readValue(stored, 'staleEntryMaxProfitEnabled', 'STALE_ENTRY_MAX_PROFIT_ENABLED') !== 'false',
 		},
 		pollIntervalMs: parseInt(readValue(stored, 'pollIntervalMs', 'POLL_INTERVAL_MS'), 10) || 5_000,
 		logRetentionHours: parseFloat(readValue(stored, 'logRetentionHours', 'LOG_RETENTION_HOURS')) || DEFAULT_LOG_RETENTION_HOURS,

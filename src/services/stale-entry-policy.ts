@@ -14,6 +14,9 @@ export interface StaleEntryConfig {
 	maxAgeMinutes: number;
 	/** Percent, e.g. 1 for 1%. */
 	maxProfitPct: number;
+	/** Each guardrail is independently toggleable - both default to on. */
+	maxAgeEnabled: boolean;
+	maxProfitEnabled: boolean;
 }
 
 export interface StaleEntryVerdict {
@@ -57,10 +60,10 @@ export function evaluateStaleEntry(
 ): StaleEntryVerdict {
 	const ageMinutes = (Date.now() - new Date(investment.createdAt).getTime()) / 60_000;
 	const pnlPercent = computeInvestmentPnlPercent(investment);
-	if (ageMinutes > config.maxAgeMinutes) {
+	if (config.maxAgeEnabled && ageMinutes > config.maxAgeMinutes) {
 		return { skip: true, permanent: true, ageMinutes, pnlPercent };
 	}
-	if (pnlPercent > config.maxProfitPct) {
+	if (config.maxProfitEnabled && pnlPercent > config.maxProfitPct) {
 		return { skip: true, permanent: false, ageMinutes, pnlPercent };
 	}
 	return { skip: false, permanent: false, ageMinutes, pnlPercent };
