@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import Button from "@/components/shared/Button";
 import { saveRequiredSecrets, type ActionState } from "@/app/settings/actions";
-import Field from "./Field";
+import SecretField from "./SecretField";
 
 const INITIAL_STATE: ActionState = { ok: false };
 
@@ -35,30 +35,30 @@ export default function RequiredSecretsForm({
 
 	return (
 		<form action={formAction} className="flex flex-col gap-4">
-			<Field
+			<SecretField
 				label="Invo refresh token"
 				name="invoRefreshToken"
-				placeholder={editing && maskedHints.invoRefreshToken ? `Current: ${maskedHints.invoRefreshToken}` : "eyJ..."}
-				hint={editing ? "Leave blank to keep the current value." : undefined}
+				currentValue={editing ? maskedHints.invoRefreshToken : undefined}
+				placeholder="eyJ..."
+				hint={editing ? "Click to edit, or leave as-is to keep the current value." : undefined}
 				required={!editing}
-				textarea
-				mono
 			/>
-			<Field
+			<SecretField
 				label="Hyperliquid agent key"
 				name="hlAgentKey"
-				placeholder={editing && maskedHints.hlAgentKey ? `Current: ${maskedHints.hlAgentKey}` : "0x..."}
-				hint={editing ? "Leave blank to keep the current value." : undefined}
+				currentValue={editing ? maskedHints.hlAgentKey : undefined}
+				placeholder="0x..."
+				hint={editing ? "Click to edit, or leave as-is to keep the current value." : undefined}
 				required={!editing}
-				mono
 			/>
-			<Field
+			<SecretField
 				label="Wallet address"
 				name="walletAddress"
-				defaultValue={walletAddress}
+				currentValue={walletAddress || undefined}
+				secret={false}
 				placeholder="0x..."
+				hint={editing ? "Click to edit, or leave as-is to keep the current value." : undefined}
 				required={!editing}
-				mono
 			/>
 
 			{state.error && <p className="text-[13px] text-loss">{state.error}</p>}

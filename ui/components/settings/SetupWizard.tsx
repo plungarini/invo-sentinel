@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import Modal from "@/components/shared/Modal";
 import Button from "@/components/shared/Button";
-import Field from "./Field";
+import SecretField from "./SecretField";
 import { saveWizardSecrets, type ActionState } from "@/app/settings/actions";
 import { CREDENTIAL_STEPS } from "./CredentialInstructions";
 import type { WizardPrefill } from "@/server/daemon/settings";
@@ -25,25 +25,33 @@ export default function SetupWizard({ prefill }: { prefill: WizardPrefill }) {
 	const [state, formAction, pending] = useActionState(saveWizardSecrets, INITIAL_STATE);
 	const [step, setStep] = useState(0);
 	const [stepError, setStepError] = useState<string | null>(null);
-	// Controlled, keyed by field - a step's value must survive navigating away
-	// and back to it (Next/Back only changes which step is *visible*, via
-	// `hidden`, not which fields are mounted), which an uncontrolled/ref-based
-	// input can't guarantee across arbitrary re-renders. The two secret fields
-	// start blank even when a value already resolves from `.env`/DB - that
-	// resolved value is only ever known server-side (see `maskedHint` below
-	// and `saveWizardSecrets`), never sent here as real text. `walletAddress`
-	// isn't a secret, so it prefills in full and is immediately editable.
+	// Controlled, keyed by field - a step's typed value must survive
+	// navigating away and back to it (Next/Back only changes which step is
+	// *visible*, via `hidden`, not which fields are mounted), which an
+	// uncontrolled/ref-based input can't guarantee across arbitrary
+	// re-renders. All three fields start blank here regardless of whether a
+	// value already resolves from `.env`/DB - that resolved value is only
+	// ever known server-side (see `currentValueFor` below and
+	// `saveWizardSecrets`), never sent here as real text for the two actual
+	// secrets. `walletAddress` isn't a secret, so its resolved value IS sent
+	// as real text (`prefill.walletAddress`), just not seeded into `values`
+	// directly - `SecretField` displays it via `currentValue` instead, the
+	// same as the two secrets' masked previews.
 	const [values, setValues] = useState<Record<string, string>>({
 		invoRefreshToken: "",
 		hlAgentKey: "",
-		walletAddress: prefill.walletAddress,
+		walletAddress: "",
 	});
 
-	const maskedHint = (key: string): string =>
-		key === "invoRefreshToken" ? prefill.maskedInvoRefreshToken : key === "hlAgentKey" ? prefill.maskedHlAgentKey : "";
+	const currentValueFor = (key: string): string =>
+		key === "invoRefreshToken"
+			? prefill.maskedInvoRefreshToken
+			: key === "hlAgentKey"
+				? prefill.maskedHlAgentKey
+				: prefill.walletAddress;
 
 	/** A step can be skipped past without typing anything if it already has an effective value (from `.env` or a prior DB save) to confirm. */
-	const hasEffectiveValue = (key: string): boolean => values[key].trim() !== "" || maskedHint(key) !== "";
+	const hasEffectiveValue = (key: string): boolean => values[key].trim() !== "" || currentValueFor(key) !== "";
 
 	const isLast = step === CREDENTIAL_STEPS.length - 1;
 
@@ -92,14 +100,13 @@ export default function SetupWizard({ prefill }: { prefill: WizardPrefill }) {
 							<div className="rounded-xl border border-border bg-surface-hover p-3 text-[13px] leading-relaxed">
 								{s.instructions}
 							</div>
-							<Field
+							<SecretField
 								name={s.key}
-								value={values[s.key]}
+								currentValue={currentValueFor(s.key) || undefined}
+								secret={s.key !== "walletAddress"}
 								onChange={(v) => setValues((prev) => ({ ...prev, [s.key]: v }))}
-								placeholder={maskedHint(s.key) ? `Current: ${maskedHint(s.key)}` : s.placeholder}
-								hint={maskedHint(s.key) ? "Leave blank to keep this value." : undefined}
-								textarea={s.inputType === "textarea"}
-								mono
+								placeholder={s.placeholder}
+								hint={currentValueFor(s.key) ? "Click to edit, or continue to keep this value." : undefined}
 							/>
 						</div>
 					))}
