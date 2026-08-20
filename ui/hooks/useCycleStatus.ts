@@ -8,6 +8,9 @@ export interface StatusResponse {
 	ignoredCount: number;
 	tokenDaysRemaining: number | null;
 	recentActivity: RecentActivityEntry[];
+	avgPollDurationMs: number | null;
+	avgPollSampleCount: number;
+	pollIntervalMs: number;
 }
 
 export function useCycleStatus(fallbackData?: StatusResponse) {

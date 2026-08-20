@@ -11,6 +11,8 @@ import CycleStatusWidget from "@/components/homepage/CycleStatusWidget";
 import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
 import AgentKeyExpiryWidget from "@/components/homepage/AgentKeyExpiryWidget";
 import DaemonHealthWidget from "@/components/homepage/DaemonHealthWidget";
+import AvgPollTimeWidget from "@/components/homepage/AvgPollTimeWidget";
+import TrackedPositionsWidget from "@/components/homepage/TrackedPositionsWidget";
 import RecentActivityWidget from "@/components/homepage/RecentActivityWidget";
 import { formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/types/ui";
@@ -96,6 +98,12 @@ export default function OverviewClient({
 					<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 						<CycleStatusWidget cycle={data.cycle} />
 						<DaemonHealthWidget cycle={data.cycle} />
+						<AvgPollTimeWidget
+							avgPollDurationMs={data.avgPollDurationMs}
+							avgPollSampleCount={data.avgPollSampleCount}
+							pollIntervalMs={data.pollIntervalMs}
+						/>
+						<TrackedPositionsWidget trackedCount={data.trackedCount} />
 						<TokenExpiryWidget tokenDaysRemaining={data.tokenDaysRemaining} />
 						<AgentKeyExpiryWidget />
 					</div>
@@ -106,7 +114,9 @@ export default function OverviewClient({
 						<WidgetSkeleton />
 						<WidgetSkeleton />
 						<WidgetSkeleton />
+						<WidgetSkeleton />
 						<AgentKeyExpiryWidget />
+						<WidgetSkeleton />
 					</div>
 				)}
 
