@@ -11,7 +11,6 @@ console.log(new TextDecoder().decode(decrypted)); // 3 dot-separated parts; that
 export interface CredentialStep {
 	key: "invoRefreshToken" | "hlAgentKey" | "walletAddress";
 	label: string;
-	inputType: "textarea" | "input";
 	placeholder: string;
 	/** Where to find this one value - same extraction steps as the README's Credentials section, kept as the single source both the step-by-step wizard and the Settings page's reference read from. */
 	instructions: React.ReactNode;
@@ -22,7 +21,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "invoRefreshToken",
 		label: "Invo refresh token",
-		inputType: "textarea",
 		placeholder: "eyJ...",
 		instructions: (
 			<>
@@ -36,7 +34,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "hlAgentKey",
 		label: "Hyperliquid agent key",
-		inputType: "input",
 		placeholder: "0x...",
 		instructions: (
 			<p className="text-text-muted">
@@ -49,7 +46,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "walletAddress",
 		label: "Wallet address",
-		inputType: "input",
 		placeholder: "0x...",
 		instructions: (
 			<p className="text-text-muted">
@@ -60,16 +56,16 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 ];
 
 /**
- * Settings page's always-visible reference for all 3 at once (collapsed by
- * default past the first), unlike the wizard's one-at-a-time flow - same
- * bordered panel styling as the wizard's per-step instructions box, so the
- * two views read as one coherent pattern rather than two different designs.
+ * Settings page's always-visible reference for all 3 at once, collapsed by
+ * default, unlike the wizard's one-at-a-time flow - same bordered panel
+ * styling as the wizard's per-step instructions box, so the two views read
+ * as one coherent pattern rather than two different designs.
  */
 export default function CredentialInstructions() {
 	return (
 		<div className="flex flex-col gap-2">
-			{CREDENTIAL_STEPS.map((step, i) => (
-				<details key={step.key} className="rounded-xl border border-border bg-surface-hover px-4 py-3 text-[13px]" open={i === 0}>
+			{CREDENTIAL_STEPS.map((step) => (
+				<details key={step.key} className="rounded-xl border border-border bg-surface-hover px-4 py-3 text-[13px]">
 					<summary className="cursor-pointer font-semibold text-text">Where to find the {step.label.toLowerCase()}</summary>
 					<div className="mt-2 leading-relaxed">{step.instructions}</div>
 				</details>
