@@ -1,11 +1,19 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import Button from "@/components/shared/Button";
 import { saveRequiredSecrets, type ActionState } from "@/app/settings/actions";
 import SecretField from "./SecretField";
+import { useAutoSaveForm } from "./useAutoSaveForm";
 
 const INITIAL_STATE: ActionState = { ok: false };
+
+const SECRET_FIELDS = ["invoRefreshToken", "hlAgentKey", "walletAddress"];
+
+/** Blank means "leave unchanged" here - autosaving on a blur/change that touched nothing would just re-hit `saveRequiredSecrets`'s own "enter at least one value" rejection, plus a needless live credentials re-check for fields that didn't actually change. */
+function hasTypedValue(formData: FormData): boolean {
+	return SECRET_FIELDS.some((field) => String(formData.get(field) ?? "").trim() !== "");
+}
 
 /**
  * `maskedHints` carries display-only masked previews (e.g. "eyJ0…9f3a"), never
@@ -32,9 +40,11 @@ export default function RequiredSecretsForm({
 	}, INITIAL_STATE);
 
 	const editing = !!maskedHints;
+	const formRef = useRef<HTMLFormElement>(null);
+	const autoSave = useAutoSaveForm(formRef, { pending, canSave: hasTypedValue });
 
 	return (
-		<form action={formAction} className="flex flex-col gap-4">
+		<form ref={formRef} action={formAction} className="flex flex-col gap-4" onChange={autoSave.onChange} onBlur={autoSave.onBlur}>
 			<SecretField
 				label="Invo refresh token"
 				name="invoRefreshToken"
