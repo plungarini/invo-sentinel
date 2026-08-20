@@ -1,0 +1,154 @@
+# Builds a standalone daemon executable AND a self-contained dashboard UI
+# bundle per OS whenever a release branch lands on master (gitflow:
+# `release/*` merges to `master` are the only thing that lands here - see
+# CLAUDE.md's Branching section), and attaches them to a GitHub Release
+# tagged with package.json's version.
+#
+# The `bun build --compile` + better-sqlite3 combination that blocked this
+# workflow (confirmed live on Windows/Bun 1.3.14: the compiled .exe panicked
+# the instant it opened sentinel.db - still-open upstream oven-sh/bun#4290)
+# is resolved: src/services/sqlite-adapter.ts now selects better-sqlite3
+# under normal Node/tsx dev and bun:sqlite under the Bun-compiled daemon, so
+# the native-addon path that panicked Bun is never exercised by a compiled
+# binary at all. Verified against a real `bun build --compile` executable,
+# not just `bun run` - the compiled daemon opens/migrates sentinel.db,
+# round-trips every *-store.ts (state, closed trades, ignored, cloid
+# attribution, followed portfolios), and idles correctly with no config
+# present. The smoke-test step below now exercises this same adapter path
+# (via openDb(), not a direct driver import) and is expected to pass.
+#
+# The dashboard UI (ui/) IS part of this build now - packaged as a Next.js
+# `output: 'standalone'` bundle (ui/next.config.ts), not `bun build
+# --compile` like the daemon: standalone output runs under plain Node,
+# which better-sqlite3 already works fine under, sidestepping the whole
+# Bun-native-addon problem entirely for this half. Still needs Node itself
+# on the end user's machine (not bundled) - start.bat/start.sh check for it
+# and start the daemon regardless if it's missing, just without the UI.
+# Built natively per-OS in the same matrix job as the daemon, same reasoning
+# as the daemon's own better-sqlite3 prebuilt binary: a standalone bundle's
+# node_modules still contains that native addon, so it has to be installed
+# on each real target OS, not cross-compiled from one host.
+name: Build release executables
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bun_target: bun-windows-x64
+            artifact_name: invo-sentinel-windows-x64
+            executable: invo-sentinel.exe
+            wrapper_src: scripts/start.bat
+            wrapper_dest: start.bat
+            docs_src: scripts/release-docs/GETTING-STARTED-windows.txt
+          - os: ubuntu-latest
+            bun_target: bun-linux-x64
+            artifact_name: invo-sentinel-linux-x64
+            executable: invo-sentinel
+            wrapper_src: scripts/start.sh
+            wrapper_dest: start.sh
+            docs_src: scripts/release-docs/GETTING-STARTED-linux.txt
+          - os: macos-latest
+            bun_target: bun-darwin-arm64
+            artifact_name: invo-sentinel-macos-arm64
+            executable: invo-sentinel
+            wrapper_src: scripts/start.sh
+            wrapper_dest: start.sh
+            docs_src: scripts/release-docs/GETTING-STARTED-macos.txt
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Smoke-test DB adapter under this Bun runtime
+        run: bun run scripts/smoke-test-db.ts
+
+      - name: Compile daemon executable
+        run: bun build --compile --target=${{ matrix.bun_target }} src/cli/auto-copy.ts --outfile dist/bin/${{ matrix.executable }}
+
+      - name: Bundle restart-on-crash wrapper
+        shell: bash
+        run: cp "${{ matrix.wrapper_src }}" "dist/${{ matrix.wrapper_dest }}"
+
+      - name: Build dashboard UI (standalone)
+        run: npm run build
+        working-directory: ui
+
+      - name: Assemble standalone UI bundle
+        shell: bash
+        run: |
+          cp -r ui/public ui/.next/standalone/ui/public
+          mkdir -p ui/.next/standalone/ui/.next
+          cp -r ui/.next/static ui/.next/standalone/ui/.next/static
+          cp -r ui/.next/standalone/node_modules dist/node_modules
+          cp -r ui/.next/standalone/ui dist/ui
+
+      - name: Bundle platform quick-start doc + .env.example + README
+        shell: bash
+        run: |
+          cp "${{ matrix.docs_src }}" dist/GETTING-STARTED.txt
+          cp .env.example README.md dist/
+
+      - name: Mark executables runnable
+        if: runner.os != 'Windows'
+        run: chmod +x dist/bin/${{ matrix.executable }} dist/${{ matrix.wrapper_dest }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Zip each platform's build
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            (cd "$name" && zip -r "../${name}.zip" .)
+          done
+
+      - name: Create/update GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          allowUpdates: true
+          artifacts: artifacts/*.zip
+          generateReleaseNotes: true
