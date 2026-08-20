@@ -181,3 +181,21 @@ export async function saveTraderModeSettings(_prev: ActionState, formData: FormD
 		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
 }
+
+export async function saveEmergencySettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
+	try {
+		const noNewPositions = formData.get("noNewPositions") === "on";
+		const fullStop = formData.get("fullStop") === "on";
+
+		getConfigStore().setMany({
+			emergencyNoNewPositions: String(noNewPositions),
+			emergencyFullStop: String(fullStop),
+		});
+
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}

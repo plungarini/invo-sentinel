@@ -32,6 +32,11 @@ export interface TraderModeFormValues {
 	caption: string;
 }
 
+export interface EmergencyFormValues {
+	noNewPositions: boolean;
+	fullStop: boolean;
+}
+
 /** Gate for the first-run setup wizard - DB rows only, never `.env`, so an existing Pi/Docker `.env`-only deployment never sees an unnecessary wizard. */
 export async function shouldShowSetupWizard(): Promise<boolean> {
 	return !getConfigStore().hasRequiredSecretsInDb();
@@ -82,6 +87,7 @@ export async function getSettingsFormValues(): Promise<{
 	secrets: RequiredSecretsFormValues;
 	tuning: TuningFormValues;
 	traderMode: TraderModeFormValues;
+	emergency: EmergencyFormValues;
 }> {
 	const config = await loadConfig(getConfigStore());
 	return {
@@ -109,6 +115,10 @@ export async function getSettingsFormValues(): Promise<{
 			portfolioId: config.traderMode.portfolioId ?? "",
 			autoShare: config.traderMode.autoShare,
 			caption: config.traderMode.caption ?? "",
+		},
+		emergency: {
+			noNewPositions: config.emergency.noNewPositions,
+			fullStop: config.emergency.fullStop,
 		},
 	};
 }

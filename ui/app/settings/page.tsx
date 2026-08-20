@@ -3,19 +3,26 @@ import Card from "@/components/shared/Card";
 import RequiredSecretsForm from "@/components/settings/RequiredSecretsForm";
 import TuningSettingsForm from "@/components/settings/TuningSettingsForm";
 import TraderModeSettingsForm from "@/components/settings/TraderModeSettingsForm";
+import EmergencySettingsForm from "@/components/settings/EmergencySettingsForm";
 import CredentialInstructions from "@/components/settings/CredentialInstructions";
 import { getSettingsFormValues } from "@/server/daemon/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-	const { secrets, tuning, traderMode } = await getSettingsFormValues();
+	const { secrets, tuning, traderMode, emergency } = await getSettingsFormValues();
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<PageHeader title="Settings" />
 			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-3 pt-14 md:pb-6 md:pt-0">
 				<div className="flex flex-col gap-6">
+					<Card title="Emergency">
+						{/* Keyed on content, same React 19 controlled-checkbox auto-reset
+						reason as the other two toggle-bearing forms below. */}
+						<EmergencySettingsForm key={JSON.stringify(emergency)} defaultValues={emergency} />
+					</Card>
+
 					<Card title="Credentials">
 						<RequiredSecretsForm
 							maskedHints={{ invoRefreshToken: secrets.invoRefreshToken, hlAgentKey: secrets.hlAgentKey }}
