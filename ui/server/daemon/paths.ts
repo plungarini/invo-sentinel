@@ -2,8 +2,7 @@ import type { AppConfig } from '@daemon/config/env.js';
 import { loadConfig } from '@daemon/config/env.js';
 import { ConfigStore } from '@daemon/services/config-store.js';
 import dotenv from 'dotenv';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 /**
  * Two different anchors, not one - a real bug found while building the
@@ -20,20 +19,24 @@ import { join } from 'node:path';
  * compiled daemon (see `src/services/root-dir.ts`). `process.cwd()` is the
  * reliable signal instead - both dev (`npm run ui:dev`'s `--prefix ui` sets
  * cwd to `ui/`) and the packaged release (`start.bat`/`start.sh` `cd` into
- * `ui/` before running `node server.js`) guarantee cwd is this app's own
- * directory, so "one level up" is always where `.env` lives.
+ * `bin/ui/` before running `node server.js`) guarantee cwd is this app's
+ * own directory.
  *
- * Where `data/`/`logs/`/the DB itself live is a SEPARATE anchor, because
- * the daemon's own `resolveRootDir()` puts those inside `bin/` in the
- * packaged case (not the release root) but at the repo root directly in
- * dev - the UI has to match whichever one the daemon actually used, or it
- * reads/writes a different `sentinel.db` entirely. A `bin/` sibling folder
- * existing is the signal: packaging always creates it, a source checkout
- * never does.
+ * Where `data/`/`logs/`/the DB itself live is a SEPARATE anchor from where
+ * `.env` lives, because the daemon's own `resolveRootDir()` puts those
+ * inside `bin/` in the packaged case (not the release root) but at the
+ * repo root directly in dev - the UI has to match whichever one the daemon
+ * actually used, or it reads/writes a different `sentinel.db` entirely.
+ * `data/`/`logs/` always live one level up from this app's own directory
+ * (`bin/` in the packaged release, the repo root in dev) - that parent is
+ * `DATA_ROOT` below. Whether that parent is itself named `bin` is the
+ * signal for whether `.env` lives one more level up still (the packaged
+ * release, where `bin/` sits inside the release root next to `start.bat`)
+ * or is the same directory (dev, where there's no `bin/` wrapping at all).
  */
-const ENV_ROOT = join(process.cwd(), '..');
-const PACKAGED_BIN_DIR = join(ENV_ROOT, 'bin');
-export const REPO_ROOT = existsSync(PACKAGED_BIN_DIR) ? PACKAGED_BIN_DIR : ENV_ROOT;
+const DATA_ROOT = dirname(process.cwd());
+const ENV_ROOT = basename(DATA_ROOT) === 'bin' ? dirname(DATA_ROOT) : DATA_ROOT;
+export const REPO_ROOT = DATA_ROOT;
 
 dotenv.config({ path: join(ENV_ROOT, '.env') });
 
