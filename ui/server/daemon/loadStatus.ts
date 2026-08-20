@@ -6,14 +6,14 @@ import { getInvoClient } from "../invo/client";
 import type { StatusResponse } from "@/hooks/useCycleStatus";
 
 /** Shared by the /api/status route and the Overview page's server-side initial fetch, so first paint never shows a loading flash. */
-export function loadStatus(): StatusResponse {
+export async function loadStatus(): Promise<StatusResponse> {
 	const trackedState = readTrackedState();
 	const ignoredTrades = readIgnoredTrades();
 	const { cycle, recentActivity } = readLatestCycleStatus();
 
 	let tokenDaysRemaining: number | null = null;
 	try {
-		tokenDaysRemaining = getInvoClient().refreshTokenDaysRemaining();
+		tokenDaysRemaining = (await getInvoClient()).refreshTokenDaysRemaining();
 	} catch {
 		tokenDaysRemaining = null;
 	}

@@ -28,10 +28,8 @@ function toCanonicalUuid(id: string): string {
 export async function loadPortfolioAnalysis(rawPortfolioId: string): Promise<PortfolioAnalysisResult> {
 	const portfolioId = toCanonicalUuid(rawPortfolioId);
 	try {
-		const [result, riskEntries] = await Promise.all([
-			getInvoClient().getPortfolioById(portfolioId),
-			Promise.resolve(readPortfolioRisk()),
-		]);
+		const invo = await getInvoClient();
+		const [result, riskEntries] = await Promise.all([invo.getPortfolioById(portfolioId), Promise.resolve(readPortfolioRisk())]);
 		const risk = riskEntries.find((r) => r.portfolioId === result.id);
 		return {
 			found: true,

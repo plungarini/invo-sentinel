@@ -20,7 +20,7 @@ const OPEN_INVESTMENTS_CACHE_TTL_MS = 60_000; // priceTarget/stopLoss barely cha
  * across both call sites below so a portfolio needed by both pays once.
  */
 const loadOpenInvestments = keyedStaleWhileRevalidate(
-	(portfolioId: string) => getInvoClient().getOpenInvestments(portfolioId).catch(() => []),
+	async (portfolioId: string) => (await getInvoClient()).getOpenInvestments(portfolioId).catch(() => []),
 	OPEN_INVESTMENTS_CACHE_TTL_MS,
 );
 
