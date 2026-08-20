@@ -1,7 +1,6 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
-import Button from "@/components/shared/Button";
 import { saveEmergencySettings, type ActionState } from "@/app/settings/actions";
 import type { EmergencyFormValues } from "@/server/daemon/settings";
 import ToggleRow from "./ToggleRow";
@@ -33,13 +32,12 @@ export default function EmergencySettingsForm({ defaultValues }: { defaultValues
 				onChange={setFullStop}
 			/>
 
-			<div className="flex flex-col gap-3 border-t border-border pt-5">
-				{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
-				{state.ok && <p className="text-[13px] text-profit">Saved. Takes effect on the next poll cycle.</p>}
-				<Button type="submit" variant="primary" disabled={pending} className="self-start">
-					{pending ? "Saving..." : "Save emergency settings"}
-				</Button>
-			</div>
+			{(state.error || state.ok) && (
+				<div className="flex flex-col gap-3 border-t border-border pt-5">
+					{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
+					{state.ok && <p className="text-[13px] text-profit">Saved. Takes effect on the next poll cycle.</p>}
+				</div>
+			)}
 		</form>
 	);
 }
