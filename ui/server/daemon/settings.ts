@@ -46,8 +46,8 @@ export async function shouldShowSetupWizard(): Promise<boolean> {
  */
 export function maskSecret(value: string): string {
 	if (!value) return "";
-	if (value.length <= 8) return "•".repeat(value.length);
-	return `${value.slice(0, 4)}…${value.slice(-4)}`;
+	if (value.length <= 12) return "•".repeat(value.length);
+	return `${value.slice(0, 6)}…${value.slice(-6)}`;
 }
 
 export interface WizardPrefill {
