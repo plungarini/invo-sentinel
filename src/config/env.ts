@@ -1,8 +1,13 @@
 import 'dotenv/config';
-import type { RiskConfig } from '../types.js';
+import type { ConfigStore } from '../services/config-store.js';
+import type { EmergencyConfig, RiskConfig, TraderModeConfig, UpdateConfig } from '../types.js';
 import type { StaleEntryConfig } from '../services/stale-entry-policy.js';
 
 export interface AppConfig {
+	/** False until all 3 required secrets resolve from either the DB or `.env` - a normal boot state, not an error. */
+	configured: boolean;
+	/** Required env var names still missing (DB and `.env` both empty), empty when `configured` is true. */
+	missing: string[];
 	invoRefreshToken: string;
 	hlAgentKey: string;
 	walletAddress: string;
@@ -13,7 +18,13 @@ export interface AppConfig {
 	logMaxTotalMb: number;
 	/** Optional external monitoring ping (e.g. healthchecks.io), fired after every poll cycle. Unset = disabled. */
 	healthcheckPingUrl?: string;
+	traderMode: TraderModeConfig;
+	emergency: EmergencyConfig;
+	update: UpdateConfig;
 }
+
+export const DEFAULT_LOG_RETENTION_HOURS = 24;
+export const DEFAULT_LOG_MAX_TOTAL_MB = 200;
 
 function parsePercent(raw: string | undefined, fallback: number): number {
 	const n = parseFloat(raw ?? '');
@@ -21,47 +32,141 @@ function parsePercent(raw: string | undefined, fallback: number): number {
 }
 
 /**
- * Loads and validates config from the environment. CLI positional args for
- * min/max margin %, if provided by the caller, take precedence over env ;
- * pass them in as overrides.
+ * DB row presence wins once set (what makes the setup wizard/settings page
+ * mean anything) - `.env` is the fallback only when there's no row at all,
+ * not when the row's value happens to be falsy/empty. An explicit blank
+ * (e.g. clearing "Max leverage" on the settings page, whose own hint reads
+ * "blank = no cap") must actually override a non-blank `.env` value rather
+ * than falling through to it; the settings-page write side must write `''`
+ * for "cleared", never delete the row, or this check can't tell "cleared"
+ * apart from "never configured".
  */
-export function loadConfig(overrides: { minMarginPct?: number; maxMarginPct?: number } = {}): AppConfig {
-	const invoRefreshToken = process.env.INVO_REFRESH_TOKEN ?? '';
-	const hlAgentKey = process.env.HL_AGENT_KEY ?? '';
-	const walletAddress = process.env.WALLET_ADDRESS ?? '';
+function readValue(stored: Record<string, string>, dbKey: string, envKey: string): string {
+	if (dbKey in stored) return stored[dbKey];
+	return process.env[envKey] || '';
+}
+
+/**
+ * Reads just the margin risk band - split out from `loadConfig` so
+ * `Reconciler.run()` can re-resolve it fresh every cycle (a settings-page
+ * edit takes effect on the next cycle, not just at boot) without paying for
+ * a full config read/validation on every other field too. CLI positional
+ * overrides, if provided, still take precedence over both DB and `.env`.
+ */
+export function loadRiskConfig(
+	configStore: ConfigStore,
+	overrides: { minMarginPct?: number; maxMarginPct?: number } = {},
+): RiskConfig {
+	const stored = configStore.load();
+	const minMarginPct = overrides.minMarginPct ?? parsePercent(readValue(stored, 'minMarginPct', 'MIN_MARGIN_PCT'), 0.02);
+	const maxMarginPct = overrides.maxMarginPct ?? parsePercent(readValue(stored, 'maxMarginPct', 'MAX_MARGIN_PCT'), 0.05);
+	if (minMarginPct < 0 || maxMarginPct < minMarginPct) {
+		throw new Error(`Invalid risk band: min=${minMarginPct * 100}% max=${maxMarginPct * 100}%`);
+	}
+
+	const maxLeverageRaw = parseFloat(readValue(stored, 'maxLeverage', 'MAX_LEVERAGE'));
+
+	return {
+		minMarginPct,
+		maxMarginPct,
+		maxLeverage: Number.isFinite(maxLeverageRaw) ? maxLeverageRaw : undefined,
+	};
+}
+
+/**
+ * Reads Trader-mode settings - split out from `loadConfig` for the same
+ * reason as `loadRiskConfig`: `Reconciler.run()` re-resolves it fresh every
+ * cycle so a settings-page edit takes effect on the next cycle, not just at
+ * daemon restart, without paying for a full config read on every other field.
+ */
+export function loadTraderModeConfig(configStore: ConfigStore): TraderModeConfig {
+	const stored = configStore.load();
+	return {
+		enabled: readValue(stored, 'traderModeEnabled', 'TRADER_MODE_ENABLED') === 'true',
+		portfolioId: readValue(stored, 'traderModePortfolioId', 'TRADER_MODE_PORTFOLIO_ID') || undefined,
+		autoShare: readValue(stored, 'traderModeAutoShare', 'TRADER_MODE_AUTO_SHARE') === 'true',
+		caption: readValue(stored, 'traderModeCaption', 'TRADER_MODE_CAPTION') || undefined,
+	};
+}
+
+/**
+ * Reads the two global emergency toggles - split out from `loadConfig` for
+ * the same reason as `loadRiskConfig`/`loadTraderModeConfig`: `Reconciler.run()`
+ * and the main poll loop both re-resolve this fresh every cycle, so flipping
+ * either switch on the settings page takes effect on the next cycle, not
+ * just at daemon restart. Both default to off (absence = false).
+ */
+export function loadEmergencyConfig(configStore: ConfigStore): EmergencyConfig {
+	const stored = configStore.load();
+	return {
+		noNewPositions: readValue(stored, 'emergencyNoNewPositions', 'EMERGENCY_NO_NEW_POSITIONS') === 'true',
+		fullStop: readValue(stored, 'emergencyFullStop', 'EMERGENCY_FULL_STOP') === 'true',
+	};
+}
+
+/**
+ * Reads the auto-update toggle - split out for the same reason as
+ * `loadEmergencyConfig`: re-resolved fresh every check cycle, not just at
+ * boot, so flipping it off on the settings page stops the very next
+ * scheduled update check rather than requiring a restart. Defaults to on
+ * (absence = true) per the feature's own default.
+ */
+export function loadUpdateConfig(configStore: ConfigStore): UpdateConfig {
+	const stored = configStore.load();
+	return {
+		autoUpdate: readValue(stored, 'autoUpdate', 'AUTO_UPDATE') !== 'false',
+	};
+}
+
+/**
+ * Loads and validates config from `ConfigStore` (sentinel.db), falling back
+ * to `process.env`/`.env` for anything not yet set in the DB. Async so a
+ * future `ConfigStore` backend needing real I/O doesn't force another
+ * signature change - `ConfigStore` itself is synchronous SQLite today.
+ * Returns a "not configured yet" state instead of throwing when required
+ * secrets are missing from both sources - that's a normal first-run state
+ * now, not a fatal error; callers decide what to do with `configured: false`.
+ * CLI positional args for min/max margin %, if provided by the caller, take
+ * precedence over both DB and `.env`; pass them in as overrides.
+ */
+export async function loadConfig(
+	configStore: ConfigStore,
+	overrides: { minMarginPct?: number; maxMarginPct?: number } = {},
+): Promise<AppConfig> {
+	const stored = configStore.load();
+
+	const invoRefreshToken = readValue(stored, 'invoRefreshToken', 'INVO_REFRESH_TOKEN');
+	const hlAgentKey = readValue(stored, 'hlAgentKey', 'HL_AGENT_KEY');
+	const walletAddress = readValue(stored, 'walletAddress', 'WALLET_ADDRESS');
 
 	const missing: string[] = [];
 	if (!invoRefreshToken) missing.push('INVO_REFRESH_TOKEN');
 	if (!hlAgentKey) missing.push('HL_AGENT_KEY');
 	if (!walletAddress) missing.push('WALLET_ADDRESS');
-	if (missing.length > 0) {
-		throw new Error(`Missing required .env vars: ${missing.join(', ')}; see .env.example`);
-	}
 
-	const minMarginPct = overrides.minMarginPct ?? parsePercent(process.env.MIN_MARGIN_PCT, 0.02);
-	const maxMarginPct = overrides.maxMarginPct ?? parsePercent(process.env.MAX_MARGIN_PCT, 0.05);
-	if (minMarginPct < 0 || maxMarginPct < minMarginPct) {
-		throw new Error(`Invalid risk band: min=${minMarginPct * 100}% max=${maxMarginPct * 100}%`);
-	}
-
-	const maxLeverageRaw = parseFloat(process.env.MAX_LEVERAGE ?? '');
+	const risk = loadRiskConfig(configStore, overrides);
 
 	return {
+		configured: missing.length === 0,
+		missing,
 		invoRefreshToken,
 		hlAgentKey,
 		walletAddress,
-		risk: {
-			minMarginPct,
-			maxMarginPct,
-			maxLeverage: Number.isFinite(maxLeverageRaw) ? maxLeverageRaw : undefined,
-		},
+		risk,
 		staleEntry: {
-			maxAgeMinutes: parseFloat(process.env.STALE_ENTRY_MAX_AGE_MINUTES ?? '') || 1,
-			maxProfitPct: parseFloat(process.env.STALE_ENTRY_MAX_PROFIT_PCT ?? '') || 1,
+			maxAgeMinutes: parseFloat(readValue(stored, 'staleEntryMaxAgeMinutes', 'STALE_ENTRY_MAX_AGE_MINUTES')) || 1,
+			maxProfitPct: parseFloat(readValue(stored, 'staleEntryMaxProfitPct', 'STALE_ENTRY_MAX_PROFIT_PCT')) || 1,
+			// Absence (no DB row, no env var) means on - these guardrails default
+			// to enabled, so only an explicit 'false' turns either off.
+			maxAgeEnabled: readValue(stored, 'staleEntryMaxAgeEnabled', 'STALE_ENTRY_MAX_AGE_ENABLED') !== 'false',
+			maxProfitEnabled: readValue(stored, 'staleEntryMaxProfitEnabled', 'STALE_ENTRY_MAX_PROFIT_ENABLED') !== 'false',
 		},
-		pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '', 10) || 5_000,
-		logRetentionHours: parseFloat(process.env.LOG_RETENTION_HOURS ?? '') || 24,
-		logMaxTotalMb: parseFloat(process.env.LOG_MAX_TOTAL_MB ?? '') || 200,
-		healthcheckPingUrl: process.env.HEALTHCHECK_PING_URL || undefined,
+		pollIntervalMs: parseInt(readValue(stored, 'pollIntervalMs', 'POLL_INTERVAL_MS'), 10) || 5_000,
+		logRetentionHours: parseFloat(readValue(stored, 'logRetentionHours', 'LOG_RETENTION_HOURS')) || DEFAULT_LOG_RETENTION_HOURS,
+		logMaxTotalMb: parseFloat(readValue(stored, 'logMaxTotalMb', 'LOG_MAX_TOTAL_MB')) || DEFAULT_LOG_MAX_TOTAL_MB,
+		healthcheckPingUrl: readValue(stored, 'healthcheckPingUrl', 'HEALTHCHECK_PING_URL') || undefined,
+		traderMode: loadTraderModeConfig(configStore),
+		emergency: loadEmergencyConfig(configStore),
+		update: loadUpdateConfig(configStore),
 	};
 }

@@ -157,7 +157,11 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 		const isBuy = stateEntry ? stateEntry.isBuy : (durable?.isBuy ?? deriveIsBuy(stateEntry, baseEvents, openInv, closedInv));
 		const trader = stateEntry?.ownerUsername ?? durable?.ownerUsername ?? openInv?.owner?.username ?? closedInv?.owner?.username ?? findField<string>(baseEvents, "trader");
 		const portfolioId = stateEntry?.portfolioId ?? durable?.portfolioId ?? openInv?.portfolio?.id ?? closedInv?.portfolio?.id;
-		const portfolioTitle = (portfolioId ? portfolioTitleById.get(portfolioId) : undefined) ?? durable?.portfolioTitle;
+		// portfolioTitleById only knows CURRENTLY followed portfolios - an open
+		// trade whose portfolio was unfollowed (but is still tracked
+		// independently, see reconciler.ts) needs its own state-level snapshot
+		// instead, the same way durable.portfolioTitle covers a closed trade.
+		const portfolioTitle = (portfolioId ? portfolioTitleById.get(portfolioId) : undefined) ?? stateEntry?.portfolioTitle ?? durable?.portfolioTitle;
 
 		const openedEvent = baseEvents.find((e) => e.type === "opened" || e.type === "auto_adopted");
 		const openedAt = stateEntry?.openedAt ?? durable?.openedAt ?? (openedEvent?.ts as string | undefined);

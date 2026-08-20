@@ -5,8 +5,9 @@ import type { ClosedTradesStore } from '../services/closed-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
-import type { HyperliquidFill, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
+import type { HyperliquidFill, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
 import { resolveConflictByCloid } from './cloid-attribution.js';
+import type { TraderModeSync } from './trader-mode-sync.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
 const HL_MIN_NOTIONAL_USD = 10; // exchange-enforced floor; below this HL rejects the order outright
@@ -30,6 +31,8 @@ export interface PositionSyncOptions {
 	getFillsOnce: () => Promise<HyperliquidFill[]>;
 	/** Durable closed-trade history - written once per real close, so portfolio-level analytics survive both the close and a later unfollow. */
 	closedTrades: ClosedTradesStore;
+	/** Best-effort side effect mirroring our own actions onto a separate "Trader mode" Invo portfolio - see trader-mode-sync.ts. */
+	traderModeSync: TraderModeSync;
 }
 
 /**
@@ -61,7 +64,12 @@ export class PositionSync {
 	 * position it just discovered. Mutates `state` in place; caller persists.
 	 * `risk` is per-call, not fixed at construction - the caller resolves
 	 * it per-portfolio (see `resolvePortfolioRisk`) since a followed
-	 * portfolio may have its own margin-band override.
+	 * portfolio may have its own margin-band override. `traderMode` is
+	 * likewise per-call (re-read fresh every cycle), same convention as `risk`.
+	 * `noNewPositions` (the emergency "don't open new positions" switch) only
+	 * blocks the genuinely-brand-new-order path below; adjusts, closes, and
+	 * auto-adopting an already-real pre-existing position (no new capital,
+	 * no new order) are unaffected.
 	 */
 	async openOrAdjust(
 		baseId: string,
@@ -70,8 +78,10 @@ export class PositionSync {
 		investmentsByCoin: Map<string, OpenInvestment[]>,
 		ignored: IgnoredTradesMap,
 		risk: RiskConfig,
+		traderMode: TraderModeConfig,
+		noNewPositions = false,
 	): Promise<void> {
-		const { log, staleEntry, dryRun, hl, invo, getFillsOnce } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo, getFillsOnce, traderModeSync } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
@@ -155,8 +165,12 @@ export class PositionSync {
 			marginUsd: 0,
 			ourBaseShortId: '',
 			portfolioId: investment.portfolio?.id,
+			portfolioTitle: investment.portfolio?.title,
 			ownerUsername: investment.owner?.username,
 		};
+		// Refreshed every cycle while still followed, so the last-known value is
+		// what's left behind once the portfolio is unfollowed and this stops updating.
+		if (investment.portfolio?.title) entry.portfolioTitle = investment.portfolio.title;
 
 		// The user is always free to open/edit/close positions manually on
 		// Hyperliquid directly - this daemon must never crash or fight that.
@@ -200,6 +214,7 @@ export class PositionSync {
 					closedAt: new Date().toISOString(),
 					closeReason: 'manual_close_detected',
 				});
+				await traderModeSync.mirrorClose(baseId, entry, traderMode, null);
 				log({
 					type: 'manual_close_detected',
 					baseId,
@@ -232,6 +247,7 @@ export class PositionSync {
 					closedAt: new Date().toISOString(),
 					closeReason: 'manual_direction_change_detected',
 				});
+				await traderModeSync.mirrorClose(baseId, entry, traderMode, null);
 				log({
 					type: 'manual_direction_change_detected',
 					baseId,
@@ -378,6 +394,10 @@ export class PositionSync {
 		// Within the fresh window but already up more than maxProfitPct,
 		// refuse for now, but only for now - re-evaluated next cycle.
 		if (!entry.ourBaseShortId) {
+			if (noNewPositions) {
+				log({ type: 'skip', reason: 'emergency: new positions disabled', baseId, coin, trader: investment.owner?.username });
+				return;
+			}
 			const verdict = evaluateStaleEntry(investment, staleEntry);
 			if (verdict.skip) {
 				if (verdict.permanent) {
@@ -518,9 +538,12 @@ export class PositionSync {
 				lastAppliedFraction: clampedFraction,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
+				portfolioTitle: entry.portfolioTitle,
 				ownerUsername: investment.owner?.username,
 				entryPrice: entry.entryPrice ?? (wasNewPosition ? price : undefined),
 				openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
+				traderModeInvoBaseId: entry.traderModeInvoBaseId,
+				traderModeEntrySim: entry.traderModeEntrySim,
 			};
 			log({
 				type: 'dry_run_' + (wasNewPosition ? 'open' : isIncrease ? 'increase' : 'reduce'),
@@ -537,6 +560,10 @@ export class PositionSync {
 				wouldOrderSize: deltaSize,
 				wouldOrderSide: orderIsBuy ? 'buy' : 'sell',
 			});
+			// dryRun is checked first inside TraderModeSync too, so this never
+			// fires a live Invo call - only logs what it WOULD have mirrored.
+			if (wasNewPosition) await traderModeSync.mirrorOpen(baseId, state[baseId], traderMode, equity, leverage);
+			else await traderModeSync.mirrorAdjust(baseId, state[baseId], traderMode, equity);
 			return;
 		}
 
@@ -612,10 +639,22 @@ export class PositionSync {
 			lastAppliedFraction: clampedFraction,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
+			portfolioTitle: entry.portfolioTitle,
 			ownerUsername: investment.owner?.username,
 			entryPrice: entry.entryPrice ?? (wasNewPosition ? extractAvgFillPrice(orderResult) ?? price : undefined),
 			openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
+			traderModeInvoBaseId: entry.traderModeInvoBaseId,
+			traderModeEntrySim: entry.traderModeEntrySim,
 		};
+
+		// Best-effort mirror onto the Trader-mode Invo portfolio, if enabled -
+		// never affects the real order/state above, which has already fully
+		// committed by this point.
+		const traderModeResult = wasNewPosition
+			? await traderModeSync.mirrorOpen(baseId, state[baseId], traderMode, equity, leverage)
+			: await traderModeSync.mirrorAdjust(baseId, state[baseId], traderMode, equity);
+		if (traderModeResult.traderModeInvoBaseId) state[baseId].traderModeInvoBaseId = traderModeResult.traderModeInvoBaseId;
+		if (traderModeResult.traderModeEntrySim != null) state[baseId].traderModeEntrySim = traderModeResult.traderModeEntrySim;
 
 		log({
 			type: wasNewPosition ? 'opened' : isIncrease ? 'increased' : 'reduced',
@@ -636,9 +675,50 @@ export class PositionSync {
 		});
 	}
 
+	/**
+	 * For a baseId whose portfolio is no longer followed - detached from
+	 * trader-signal-driven management, but per the unfollow contract its real
+	 * position must never be closed BY this daemon. This only reconciles the
+	 * other direction: if the real position has already gone to zero on its
+	 * own (closed manually, stopped out, liquidated) since the last check,
+	 * record that as a real close and stop tracking; otherwise it's a no-op -
+	 * the entry stays tracked exactly as-is, no order is ever placed here.
+	 */
+	async finalizeIfDetachedPositionClosed(baseId: string, state: PositionStateMap, livePositions: HyperliquidPosition[], traderMode: TraderModeConfig): Promise<void> {
+		const entry = state[baseId];
+		if (!entry) return;
+		const stillOpen = livePositions.some((p) => p.coin === entry.coin && parseFloat(p.szi) !== 0);
+		if (stillOpen) return;
+
+		await this.opts.traderModeSync.mirrorClose(baseId, entry, traderMode, null);
+		this.opts.closedTrades.record({
+			baseId,
+			coin: entry.coin,
+			isBuy: entry.isBuy,
+			leverage: entry.leverage,
+			marginUsd: entry.marginUsd,
+			portfolioId: entry.portfolioId,
+			portfolioTitle: entry.portfolioTitle,
+			ownerUsername: entry.ownerUsername,
+			entryPrice: entry.entryPrice,
+			openedAt: entry.openedAt,
+			closedAt: new Date().toISOString(),
+			closeReason: 'detached_position_closed_externally',
+		});
+		this.opts.log({
+			type: 'detached_position_closed_externally',
+			baseId,
+			coin: entry.coin,
+			trader: entry.ownerUsername,
+			portfolioId: entry.portfolioId,
+			detail: 'real HL position for this detached (unfollowed-portfolio) trade is gone; recording close and stopping tracking',
+		});
+		delete state[baseId];
+	}
+
 	/** Fully mirrors a close; always, never clamped. `portfolioTitle` is a point-in-time snapshot for the durable closed-trade record - state itself never stores it, only `portfolioId`. */
-	async close(baseId: string, state: PositionStateMap, portfolioTitle?: string): Promise<void> {
-		const { log, dryRun, hl, invo, closedTrades } = this.opts;
+	async close(baseId: string, state: PositionStateMap, traderMode: TraderModeConfig, portfolioTitle?: string): Promise<void> {
+		const { log, dryRun, hl, invo, closedTrades, traderModeSync } = this.opts;
 		const entry = state[baseId];
 		if (!entry) return; // caller already knows it's tracked; defensive only
 
@@ -663,6 +743,7 @@ export class PositionSync {
 		const pos = positions.find((p) => p.coin === entry.coin);
 		if (!pos) {
 			log({ type: 'skip_close', reason: 'no open HL position for this coin', baseId, coin: entry.coin });
+			await traderModeSync.mirrorClose(baseId, entry, traderMode, null);
 			recordClosedTrade(null, 'skip_close_no_real_position');
 			delete state[baseId];
 			return;
@@ -671,6 +752,7 @@ export class PositionSync {
 
 		if (dryRun) {
 			log({ type: 'dry_run_close', baseId, coin: entry.coin, trader: entry.ownerUsername, qtyBefore });
+			await traderModeSync.mirrorClose(baseId, entry, traderMode, null);
 			delete state[baseId];
 			return;
 		}
@@ -700,6 +782,8 @@ export class PositionSync {
 		} catch (e: any) {
 			invoResult = { error: e.message };
 		}
+		const closingPrice = extractAvgFillPrice(closeResult);
+		await traderModeSync.mirrorClose(baseId, entry, traderMode, closingPrice);
 		log({
 			type: 'closed',
 			baseId,
@@ -709,7 +793,7 @@ export class PositionSync {
 			hlResult: closeResult,
 			invoResult,
 		});
-		recordClosedTrade(extractAvgFillPrice(closeResult), 'closed');
+		recordClosedTrade(closingPrice, 'closed');
 		delete state[baseId];
 	}
 }

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/bin/
 ui/.next/
 ui/.env.local
 ui/tsconfig.tsbuildinfo
@@ -18,4 +19,7 @@ INCIDENT_LOG.md
 .codex
 .agent_context
 .opencode
-.github
+.multica-work
+attachments
+.multica-tmp
+.log

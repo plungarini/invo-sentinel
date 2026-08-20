@@ -1,0 +1,51 @@
+Invo Sentinel - Linux quick start
+=================================
+
+What's in this folder:
+
+  start.sh    <- run this one. Starts everything.
+  bin/        <- the daemon program and its data/logs live in here - you
+                 don't need to touch anything in this folder directly.
+  ui/         <- the dashboard's own files - also not meant to be run
+                 directly, start.sh handles it.
+  .env.example
+  README.md   <- the full project documentation (setup wizard, risk
+                 config, dashboard UI, troubleshooting, everything).
+
+1. Open a terminal in this folder and run:
+
+     chmod +x start.sh bin/invo-sentinel   # one-time, if not already executable
+     ./start.sh
+
+   The terminal stays attached while Invo Sentinel runs - closing it stops
+   everything. start.sh starts both the daemon and the dashboard UI, and
+   automatically restarts the daemon if it ever crashes - leave the
+   terminal open, or see step 4 below to run detached.
+
+   The dashboard UI needs Node.js installed (get it from nodejs.org) - the
+   daemon itself needs nothing and will start regardless. If Node isn't
+   found, start.sh says so and starts the daemon on its own; install Node
+   and re-run for the UI too.
+
+2. Your browser should open to the dashboard automatically after a few
+   seconds (http://localhost:4400). If it doesn't, just open that address
+   yourself.
+
+3. On first run, nothing is configured yet - the daemon just waits (it
+   will NOT crash or exit) and the dashboard shows a short setup wizard
+   for the 3 required values (Invo refresh token, Hyperliquid agent key,
+   wallet address). Alternatively, hand-edit a .env file placed in this
+   same folder, next to start.sh (see README.md's "Credentials" section
+   for the same 3 variables). Either way, the already-running daemon picks
+   up the values automatically within a few seconds - no restart needed.
+
+4. Want it to run detached instead of keeping a terminal open? Run:
+
+     ./start.sh --background
+
+   Want it to start automatically at boot? See the "Running continuously"
+   section of README.md for the systemd user-service setup (recommended)
+   or pm2/Docker alternatives.
+
+Everything else - risk configuration, the dashboard UI, auditing tools,
+troubleshooting - is documented in README.md in this same folder.

@@ -9,7 +9,7 @@ import type { Logger } from '../services/logger.js';
 import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { resolvePortfolioRisk } from '../services/risk-policy.js';
 import type { StateStore } from '../services/state-store.js';
-import type { CloidAttributionCache, FollowedPortfolio, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig } from '../types.js';
+import type { CloidAttributionCache, EmergencyConfig, FollowedPortfolio, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
 import { discoverCloidAttributedCoins, type ResolvedAttribution } from './cloid-attribution.js';
 import type { PortfolioPoller } from './portfolio-poller.js';
 import type { PositionSync } from './position-sync.js';
@@ -32,6 +32,10 @@ export class Reconciler {
 	private invalidOverridePortfolioIds = new Set<string>();
 	/** Last-logged override signature per portfolio ("min|max"), so a change re-logs but a steady override doesn't spam every cycle. */
 	private loggedOverrideSignature = new Map<string, string>();
+	/** The global band as of the previous cycle, so a change can be logged explicitly - a mid-run edit resizes every clamped position within seconds, real orders that would otherwise be indistinguishable in the logs from trader-driven adjustments (and unexplainable by reconcile.ts's Invo/HL audit). `null` until the first cycle completes, so boot itself is never logged as a "change". */
+	private lastGlobalRisk: RiskConfig | null = null;
+	/** baseIds already logged as detached-from-an-unfollowed-portfolio, so the transition is logged once, not every cycle for as long as the real position stays open. */
+	private loggedDetachedBaseIds = new Set<string>();
 
 	constructor(
 		private poller: PortfolioPoller,
@@ -44,7 +48,12 @@ export class Reconciler {
 		private followedPortfoliosStore: FollowedPortfoliosStore,
 		private cloidAttributionStore: CloidAttributionStore,
 		private cycleFillsCache: CycleFillsCache,
-		private globalRisk: RiskConfig,
+		/** Called once at the top of every cycle, not just at construction - a settings-page edit to the global margin band takes effect on the next cycle, not just at daemon restart. */
+		private getGlobalRisk: () => RiskConfig,
+		/** Same convention as `getGlobalRisk` - re-read fresh every cycle so a Trader-mode settings change takes effect on the next cycle. */
+		private getTraderMode: () => TraderModeConfig,
+		/** Same convention - the two emergency kill switches, re-read fresh every cycle so a settings-page flip takes effect on the next one, not just at daemon restart. */
+		private getEmergency: () => EmergencyConfig,
 		private log: Logger,
 	) {}
 
@@ -56,6 +65,41 @@ export class Reconciler {
 		// means that's readable straight from the logs afterward instead.
 		const cycleStartedAt = Date.now();
 		this.log({ type: 'cycle_start' });
+
+		const emergency = this.getEmergency();
+		if (emergency.fullStop) {
+			// Halts everything - no opens/adjusts/closes, not even a fetch to
+			// look at what's out there - leaving every real position exactly
+			// as-is for manual handling, same contract as an unfollowed
+			// portfolio's detached positions, just applied globally.
+			this.log({ type: 'cycle_skipped_full_stop' });
+			this.log({ type: 'cycle_complete', durationMs: Date.now() - cycleStartedAt, skipped: true });
+			return { followedPortfolioCount: null, adHocPortfolioCount: null };
+		}
+
+		const globalRisk = this.getGlobalRisk();
+		if (
+			this.lastGlobalRisk &&
+			(this.lastGlobalRisk.minMarginPct !== globalRisk.minMarginPct ||
+				this.lastGlobalRisk.maxMarginPct !== globalRisk.maxMarginPct ||
+				this.lastGlobalRisk.maxLeverage !== globalRisk.maxLeverage)
+		) {
+			this.log({
+				type: 'risk_band_changed',
+				from: {
+					minMarginPct: this.lastGlobalRisk.minMarginPct * 100,
+					maxMarginPct: this.lastGlobalRisk.maxMarginPct * 100,
+					maxLeverage: this.lastGlobalRisk.maxLeverage ?? null,
+				},
+				to: {
+					minMarginPct: globalRisk.minMarginPct * 100,
+					maxMarginPct: globalRisk.maxMarginPct * 100,
+					maxLeverage: globalRisk.maxLeverage ?? null,
+				},
+			});
+		}
+		this.lastGlobalRisk = globalRisk;
+		const traderMode = this.getTraderMode();
 
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
@@ -190,13 +234,13 @@ export class Reconciler {
 				isAdHoc: isAdHoc || undefined,
 			});
 
-			let risk = this.globalRisk;
+			let risk = globalRisk;
 			if (!isAdHoc) {
 				// Ad-hoc (manually-mimicked) portfolios don't support a risk-band
 				// override in this version - PortfolioRiskStore only syncs
 				// entries for followed portfolios; always the global band.
 				const portfolioOverride = riskEntries.find((e) => e.portfolioId === portfolioId);
-				const resolved = resolvePortfolioRisk(this.globalRisk, portfolioOverride);
+				const resolved = resolvePortfolioRisk(globalRisk, portfolioOverride);
 				risk = resolved.risk;
 				if (resolved.invalidOverrideReason) {
 					if (!this.invalidOverridePortfolioIds.has(portfolioId)) {
@@ -231,7 +275,7 @@ export class Reconciler {
 				? new Set(Object.entries(state).filter(([, s]) => s.portfolioId === portfolioId).map(([baseId]) => baseId))
 				: null;
 
-			await this.processPortfolioInvestments(portfolioId, title, investments, risk, state, investmentsByCoin, ignored, allowedBaseIds);
+			await this.processPortfolioInvestments(portfolioId, title, investments, risk, traderMode, state, investmentsByCoin, ignored, allowedBaseIds, emergency.noNewPositions);
 		}
 
 		// Never blocks the rest of the cycle on failure - same as every other
@@ -243,34 +287,61 @@ export class Reconciler {
 		// reporting the daemon as down for what should have been a
 		// transient, gracefully-tolerated hiccup like any other).
 		try {
-			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds);
+			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds, globalRisk, traderMode, emergency.noNewPositions);
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'cloid_attribution_discovery', message: e.message });
 		}
 		this.cloidAttributionStore.save(cloidCache);
 
-		// A whole portfolio going unfollowed (not just one investment
-		// closing) stops tracking WITHOUT closing - real position left
-		// as-is for manual handling; see `logUntrackedPositions`. Skip
+		// A whole portfolio going unfollowed (not just one investment closing)
+		// stops mirroring the TRADER's signal for anything tracked from it -
+		// nothing here ever places a close order - but the trade itself keeps
+		// being tracked independently, on its own, exactly like any other
+		// tracked position: still cross-checked for a manual/external close,
+		// still fully visible to analytics via its own PositionState (which
+		// keeps portfolioId/portfolioTitle regardless of follow state). Skip
 		// entries with no portfolioId (manually `npm run adopt`ed) and
 		// ad-hoc-tracked portfolios, which were never followed to begin with.
 		const knownPortfolioIds = new Set([...followedPortfolioIds, ...adHocPortfolioIds]);
-		let untrackedUnfollowed = false;
-		for (const [baseId, entry] of Object.entries(state)) {
-			if (!entry.portfolioId || knownPortfolioIds.has(entry.portfolioId)) continue;
-			this.log({
-				type: 'untracking_unfollowed_portfolio_position',
-				baseId,
-				coin: entry.coin,
-				trader: entry.ownerUsername,
-				portfolioId: entry.portfolioId,
-				reason:
-					'portfolio no longer followed; stopping tracking WITHOUT closing - real position left exactly as-is on the wallet for manual handling',
-			});
-			delete state[baseId];
-			untrackedUnfollowed = true;
+		const detachedEntries = Object.entries(state).filter(([, entry]) => entry.portfolioId && !knownPortfolioIds.has(entry.portfolioId));
+		if (detachedEntries.length > 0) {
+			for (const [baseId, entry] of detachedEntries) {
+				if (this.loggedDetachedBaseIds.has(baseId)) continue;
+				this.loggedDetachedBaseIds.add(baseId);
+				this.log({
+					type: 'portfolio_unfollowed_position_detached',
+					baseId,
+					coin: entry.coin,
+					trader: entry.ownerUsername,
+					portfolioId: entry.portfolioId,
+					reason:
+						'portfolio no longer followed; no longer mirroring this trader\'s signal, but continuing to track this open position independently until it closes (manually, or on its own) - never auto-closed by this daemon',
+				});
+			}
+
+			// Only reconciled the other direction here (already closed for real
+			// -> stop tracking); never the reverse. A failed fetch leaves every
+			// detached entry exactly as tracked, retried next cycle, rather than
+			// risking treating "we couldn't check" as "it's gone".
+			let livePositions: HyperliquidPosition[] | null = null;
+			try {
+				livePositions = await this.hl.getPositions();
+			} catch (e: any) {
+				this.log({ type: 'error', source: 'detached_position_check', message: e.message });
+			}
+			if (livePositions) {
+				let stateChanged = false;
+				for (const [baseId] of detachedEntries) {
+					const wasTracked = !!state[baseId];
+					await this.sync.finalizeIfDetachedPositionClosed(baseId, state, livePositions, traderMode);
+					if (wasTracked && !state[baseId]) {
+						this.loggedDetachedBaseIds.delete(baseId);
+						stateChanged = true;
+					}
+				}
+				if (stateChanged) this.stateStore.save(state);
+			}
 		}
-		if (untrackedUnfollowed) this.stateStore.save(state);
 		let unfollowedIgnoredChanged = false;
 		for (const [baseId, entry] of Object.entries(ignored)) {
 			if (!entry.portfolioId || knownPortfolioIds.has(entry.portfolioId)) continue;
@@ -297,17 +368,19 @@ export class Reconciler {
 		portfolioTitle: string | undefined,
 		investments: OpenInvestment[],
 		risk: RiskConfig,
+		traderMode: TraderModeConfig,
 		state: PositionStateMap,
 		investmentsByCoin: Map<string, OpenInvestment[]>,
 		ignored: IgnoredTradesMap,
 		allowedBaseIds: Set<string> | null,
+		noNewPositions: boolean,
 	): Promise<void> {
 		const relevantInvestments = allowedBaseIds ? investments.filter((inv) => allowedBaseIds.has(inv.baseId)) : investments;
 		const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 
 		for (const investment of relevantInvestments) {
 			try {
-				await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk);
+				await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk, traderMode, noNewPositions);
 			} catch (e: any) {
 				this.log({
 					type: 'error',
@@ -327,7 +400,7 @@ export class Reconciler {
 			if (entry.portfolioId !== portfolioId) continue;
 			if (openBaseIds.has(baseId)) continue;
 			try {
-				await this.sync.close(baseId, state, portfolioTitle);
+				await this.sync.close(baseId, state, traderMode, portfolioTitle);
 			} catch (e: any) {
 				this.log({ type: 'error', source: 'close', baseId, coin: entry.coin, message: e.message });
 			}
@@ -364,6 +437,9 @@ export class Reconciler {
 		riskEntries: PortfolioRiskEntry[],
 		followedPortfolioIds: Set<string>,
 		adHocPortfolioIds: Set<string>,
+		globalRisk: RiskConfig,
+		traderMode: TraderModeConfig,
+		noNewPositions: boolean,
 	): Promise<void> {
 		const positions = await this.hl.getPositions();
 		const { resolved } = await discoverCloidAttributedCoins(this.hl, this.invo, positions, state, cloidCache, this.log);
@@ -393,7 +469,7 @@ export class Reconciler {
 			// still gets its own override checked.
 			const isFollowed = followedPortfolioIds.has(portfolioId);
 			const portfolioOverride = riskEntries.find((e) => e.portfolioId === portfolioId);
-			const risk = isFollowed ? resolvePortfolioRisk(this.globalRisk, portfolioOverride).risk : this.globalRisk;
+			const risk = isFollowed ? resolvePortfolioRisk(globalRisk, portfolioOverride).risk : globalRisk;
 
 			for (const { coin, attribution } of coins) {
 				const investment = investments.find((inv) => inv.baseId === attribution.investmentBaseId);
@@ -414,7 +490,7 @@ export class Reconciler {
 				const originalCoinInvestments = investmentsByCoin.get(coin);
 				investmentsByCoin.set(coin, [investment]);
 				try {
-					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk);
+					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk, traderMode, noNewPositions);
 				} catch (e: any) {
 					this.log({ type: 'error', source: 'cloid_adopt', baseId: investment.baseId, coin, message: e.message });
 					continue;

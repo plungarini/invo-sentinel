@@ -1,21 +1,27 @@
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
-import { loadConfig } from '../config/env.js';
+import { loadConfig, loadEmergencyConfig, loadRiskConfig, loadTraderModeConfig, loadUpdateConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { TraderModeSync } from '../core/trader-mode-sync.js';
 import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
+import { ConfigStore } from '../services/config-store.js';
+import { shouldUseConsoleTui, startConsoleTui } from '../services/console-tui.js';
 import { CycleFillsCache } from '../services/cycle-fills-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
-import { createLogger } from '../services/logger.js';
+import { createLogger, type Logger } from '../services/logger.js';
 import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
+import { isCompiledBuild, resolveRootDir } from '../services/root-dir.js';
+import { isVersionRollbackBlocked, performUpdate } from '../services/self-updater.js';
 import { StateStore } from '../services/state-store.js';
+import { checkForUpdate } from '../services/update-checker.js';
+import { APP_VERSION } from '../version.js';
 
 // No Claude/LLM in this loop. Mechanically mirrors every open/adjust/close
 // on every portfolio you follow, on a plain polling cycle. The only
@@ -28,7 +34,7 @@ import { StateStore } from '../services/state-store.js';
 // See README.md for the full design rationale (why the feed isn't used,
 // what entrySize actually means, the same-coin-multiple-traders limit).
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_DIR = resolveRootDir(import.meta.url);
 
 function parseArgs() {
 	const dryRun = process.argv.includes('--dry-run');
@@ -41,16 +47,73 @@ function parseArgs() {
 	};
 }
 
+// Decoupled from pollIntervalMs on purpose - a trading-cycle-scale check
+// against GitHub would be wasteful and pointless (releases don't ship every
+// few seconds); this uses its own long interval instead, well inside
+// GitHub's 60/hr unauthenticated rate limit.
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+/**
+ * No-op entirely on a source/`tsx` checkout (`isCompiledBuild()` false) -
+ * that setup updates via `git pull`, not this. Runs at most once per
+ * `UPDATE_CHECK_INTERVAL_MS`, gated by its own `nextCheckAt` closure rather
+ * than the trading poll loop's cadence. On finding + successfully staging a
+ * newer release, exits the process (special code 42) so `start.bat`/
+ * `start.sh` - the same wrapper that already restarts on any crash - can
+ * detect the pending-update marker and perform the actual file swap with
+ * this process fully exited (no self-file-lock hazard on any OS).
+ */
+function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Logger) {
+	let nextCheckAt = isCompiledBuild() ? Date.now() : Infinity;
+	return async function maybeCheckForUpdate(): Promise<void> {
+		if (!isCompiledBuild()) return;
+		if (Date.now() < nextCheckAt) return;
+		nextCheckAt = Date.now() + UPDATE_CHECK_INTERVAL_MS;
+
+		if (!loadUpdateConfig(configStore).autoUpdate) return;
+
+		const result = await checkForUpdate(APP_VERSION, log);
+		// Persisted so the dashboard's Settings page can show current/latest
+		// version without the UI process making its own GitHub call - same
+		// reasoning as followed-portfolios-store.ts keeping the UI out of
+		// direct Invo calls: one caller, one rate-limit budget to manage.
+		configStore.setMany({ updateLastCheckedAt: new Date().toISOString(), updateLatestVersionSeen: result.latestVersion });
+		if (!result.updateAvailable || !result.asset) return;
+		if (isVersionRollbackBlocked(rootDir, result.latestVersion)) {
+			log({ type: 'update_skipped_known_bad', version: result.latestVersion });
+			return;
+		}
+
+		const staged = await performUpdate({ rootDir, asset: result.asset, latestVersion: result.latestVersion, log });
+		if (staged) {
+			log({ type: 'update_restarting', fromVersion: APP_VERSION, toVersion: result.latestVersion });
+			process.exit(42);
+		}
+	};
+}
+
 async function main() {
 	const { dryRun, minMarginPct, maxMarginPct } = parseArgs();
-	const config = loadConfig({ minMarginPct, maxMarginPct });
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const configStore = new ConfigStore(dbPath);
+	let config = await loadConfig(configStore, { minMarginPct, maxMarginPct });
 
-	const log = createLogger({
+	// The TUI, when active, owns the terminal (its own redraw loop shows a
+	// summarized feed) - raw JSON lines would just scroll underneath it, so
+	// the logger is told to skip its own stdout mirror in that case. File
+	// logging (still the full JSON detail, used by `npm run reconcile` etc.)
+	// is unaffected either way.
+	const useTui = shouldUseConsoleTui();
+	const rawLog = createLogger({
 		name: 'auto-copy',
 		dir: join(ROOT_DIR, 'logs'),
 		retentionHours: config.logRetentionHours,
 		maxTotalMb: config.logMaxTotalMb,
+		quiet: useTui,
 	});
+	const tui = useTui ? startConsoleTui(ROOT_DIR) : null;
+	const log: Logger = tui ? (obj) => { rawLog(obj); tui.onLog(obj); } : rawLog;
+	configStore.setLogger(log);
 
 	// Never let an unforeseen error kill the process silently. Log fully
 	// (stdout + logs/) and exit non-zero so a process supervisor (pm2,
@@ -72,12 +135,24 @@ async function main() {
 		process.exit(1);
 	});
 
+	// First run on a fresh install: no crash-on-missing-config, just idle
+	// until the setup wizard (or a hand-edited .env) supplies the 3 required
+	// secrets - polled on a short fixed interval, independent of
+	// pollIntervalMs, since that value itself might not be configured yet.
+	if (!config.configured) {
+		log({ type: 'awaiting_configuration', missing: config.missing });
+		while (!config.configured) {
+			await new Promise((r) => setTimeout(r, 5_000));
+			config = await loadConfig(configStore, { minMarginPct, maxMarginPct });
+		}
+		log({ type: 'configuration_complete' });
+	}
+
 	const invo = new InvoClient(config.invoRefreshToken);
 	const hl = new HyperliquidClient(config.hlAgentKey, config.walletAddress);
 	await hl.connect();
 
 	const meta = await hl.getMeta();
-	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
 	const stateStore = new StateStore(dbPath, log);
 	const ignoredStore = new IgnoredTradesStore(dbPath, log);
 	// Deliberately still JSON, not SQLite - the one user-hand-edited store
@@ -88,6 +163,10 @@ async function main() {
 	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
 	const closedTradesStore = new ClosedTradesStore(dbPath, log);
 	const cycleFillsCache = new CycleFillsCache(hl);
+	// Trader mode mirrors onto a portfolio owned by this SAME Invo account
+	// (the one already authenticated via invoRefreshToken above) - reuses
+	// `invo` rather than a second client/token.
+	const traderModeSync = new TraderModeSync({ invo, log, dryRun });
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -97,6 +176,7 @@ async function main() {
 		assetMeta: meta.universe,
 		getFillsOnce: () => cycleFillsCache.getOnce(),
 		closedTrades: closedTradesStore,
+		traderModeSync,
 	});
 	const poller = new PortfolioPoller(invo, log);
 	const reconciler = new Reconciler(
@@ -110,12 +190,16 @@ async function main() {
 		followedPortfoliosStore,
 		cloidAttributionStore,
 		cycleFillsCache,
-		config.risk,
+		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
+		() => loadTraderModeConfig(configStore),
+		() => loadEmergencyConfig(configStore),
 		log,
 	);
 
 	log({
 		type: 'started',
+		version: APP_VERSION,
+		autoUpdate: config.update.autoUpdate,
 		minMarginPct: config.risk.minMarginPct * 100,
 		maxMarginPct: config.risk.maxMarginPct * 100,
 		maxLeverage: config.risk.maxLeverage ?? null,
@@ -127,7 +211,13 @@ async function main() {
 		portfolioRiskOverrides: portfolioRiskStore.load().filter((e) => e.minMarginPct != null || e.maxMarginPct != null)
 			.length,
 		dryRun,
+		traderModeEnabled: config.traderMode.enabled,
+		traderModePortfolioId: config.traderMode.portfolioId ?? null,
+		emergencyNoNewPositions: config.emergency.noNewPositions,
+		emergencyFullStop: config.emergency.fullStop,
 	});
+
+	const maybeCheckForUpdate = createUpdateChecker(ROOT_DIR, configStore, log);
 
 	pingStart(config.healthcheckPingUrl, log);
 	const first = await reconciler.run();
@@ -139,6 +229,14 @@ async function main() {
 	let adHocPortfolioCount = first.adHocPortfolioCount ?? 0;
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
+	await maybeCheckForUpdate();
+
+	// Full-stop means every cycle is a no-op fetch-nothing early return (see
+	// reconciler.ts) - cheap either way, but there's no reason to burn a full
+	// pollIntervalMs-paced loop iteration (plus its cycle_start/cycle_complete
+	// log pair) doing literally nothing; back off to a slow idle cadence
+	// instead, same idea as the pre-configured await-setup loop above.
+	const FULL_STOP_IDLE_MS = 30_000;
 
 	while (true) {
 		// Scales the gap between cycles up once enough portfolios are followed
@@ -146,10 +244,15 @@ async function main() {
 		// Cloudflare rate limit (500 req/300s per IP, confirmed live
 		// 2026-08-11) - see poll-schedule.ts. A no-op at typical follow counts.
 		const extraCallsPerCycle = adHocPortfolioCount; // one get_investments per ad-hoc (manually-mimicked) portfolio
-		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
-		if (delayMs > config.pollIntervalMs) {
-			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
+		const safeDelayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
+		if (safeDelayMs > config.pollIntervalMs) {
+			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs: safeDelayMs });
 		}
+		// Re-read fresh every iteration (not just once at boot) so a
+		// settings-page full-stop toggle slows the loop down on the very next
+		// wait, not just once the daemon happens to restart.
+		const fullStop = loadEmergencyConfig(configStore).fullStop;
+		const delayMs = fullStop ? Math.max(safeDelayMs, FULL_STOP_IDLE_MS) : safeDelayMs;
 		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {
@@ -157,6 +260,7 @@ async function main() {
 			if (result.followedPortfolioCount != null) followedPortfolioCount = result.followedPortfolioCount;
 			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
+			await maybeCheckForUpdate();
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });
 			pingFail(config.healthcheckPingUrl, log);
