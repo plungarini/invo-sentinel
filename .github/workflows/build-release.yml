@@ -144,11 +144,17 @@ jobs:
             (cd "$name" && zip -r "../${name}.zip" .)
           done
 
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create/update GitHub Release
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
           allowUpdates: true
-          artifacts: artifacts/*.zip
+          artifacts: artifacts/*.zip,artifacts/SHA256SUMS
           generateReleaseNotes: true
