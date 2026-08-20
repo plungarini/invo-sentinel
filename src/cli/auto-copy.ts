@@ -58,20 +58,33 @@ const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
  * No-op entirely on a source/`tsx` checkout (`isCompiledBuild()` false) -
  * that setup updates via `git pull`, not this. Runs at most once per
  * `UPDATE_CHECK_INTERVAL_MS`, gated by its own `nextCheckAt` closure rather
- * than the trading poll loop's cadence. On finding + successfully staging a
- * newer release, exits the process (special code 42) so `start.bat`/
- * `start.sh` - the same wrapper that already restarts on any crash - can
- * detect the pending-update marker and perform the actual file swap with
- * this process fully exited (no self-file-lock hazard on any OS).
+ * than the trading poll loop's cadence - except for the two manual flags
+ * below, which bypass both the interval and (for `updateManualApplyRequested`)
+ * the `autoUpdate` toggle. The UI never calls GitHub or touches `bin/`
+ * itself (see `checkForUpdatesNow`/`applyUpdateNow` in `ui/app/settings/
+ * actions.ts`) - it only flips a `ConfigStore` row, and this function is the
+ * sole place that acts on it, same "one caller" discipline as every other
+ * store here. On finding + successfully staging a newer release, exits the
+ * process (special code 42) so `start.bat`/`start.sh` - the same wrapper
+ * that already restarts on any crash - can detect the pending-update marker
+ * and perform the actual file swap with this process fully exited (no
+ * self-file-lock hazard on any OS).
  */
 function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Logger, uiSupervisor: UiSupervisor) {
 	let nextCheckAt = isCompiledBuild() ? Date.now() : Infinity;
 	return async function maybeCheckForUpdate(): Promise<void> {
 		if (!isCompiledBuild()) return;
-		if (Date.now() < nextCheckAt) return;
+
+		const manualCheck = configStore.get('updateManualCheckRequested') === 'true';
+		const manualApply = configStore.get('updateManualApplyRequested') === 'true';
+		const manual = manualCheck || manualApply;
+		if (!manual && Date.now() < nextCheckAt) return;
+		if (manualCheck) configStore.set('updateManualCheckRequested', 'false');
+		if (manualApply) configStore.set('updateManualApplyRequested', 'false');
 		nextCheckAt = Date.now() + UPDATE_CHECK_INTERVAL_MS;
 
-		if (!loadUpdateConfig(configStore).autoUpdate) return;
+		if (!manual && !loadUpdateConfig(configStore).autoUpdate) return;
+		if (manual) log({ type: 'update_manual_check_requested', apply: manualApply });
 
 		const result = await checkForUpdate(APP_VERSION, log);
 		// Persisted so the dashboard's Settings page can show current/latest
@@ -80,6 +93,13 @@ function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Log
 		// direct Invo calls: one caller, one rate-limit budget to manage.
 		configStore.setMany({ updateLastCheckedAt: new Date().toISOString(), updateLatestVersionSeen: result.latestVersion });
 		if (!result.updateAvailable || !result.asset) return;
+
+		// A plain "check now" only ever refreshes latestVersionSeen for the
+		// settings page to show - it never stages/restarts on its own unless
+		// autoUpdate also happens to be on. Only "update now" forces this
+		// regardless of that toggle.
+		if (!manualApply && !loadUpdateConfig(configStore).autoUpdate) return;
+
 		if (isVersionRollbackBlocked(rootDir, result.latestVersion)) {
 			log({ type: 'update_skipped_known_bad', version: result.latestVersion });
 			return;

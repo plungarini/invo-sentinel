@@ -213,3 +213,33 @@ export async function saveUpdateSettings(_prev: ActionState, formData: FormData)
 		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
 }
+
+/**
+ * Just a flag flip - the UI never calls GitHub itself (same "one caller, one
+ * rate-limit budget" reasoning as followed-portfolios-store.ts). The daemon's
+ * own update checker (auto-copy.ts's createUpdateChecker) picks this up on
+ * its next reconcile cycle, runs `checkForUpdate`, and clears it - refreshing
+ * `updateLastCheckedAt`/`updateLatestVersionSeen` without staging anything.
+ */
+export async function checkForUpdatesNow(_prev: ActionState, _formData: FormData): Promise<ActionState> {
+	try {
+		getConfigStore().setMany({ updateManualCheckRequested: "true" });
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/** Same flag-flip approach, but the daemon treats this one as license to stage + restart regardless of the `autoUpdate` toggle - see createUpdateChecker's `manualApply` branch. */
+export async function applyUpdateNow(_prev: ActionState, _formData: FormData): Promise<ActionState> {
+	try {
+		getConfigStore().setMany({ updateManualApplyRequested: "true" });
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
