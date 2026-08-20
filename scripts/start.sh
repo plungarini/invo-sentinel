@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# Starts everything - the daemon AND the dashboard UI (if this release
-# includes one and Node.js is available) - from a single command. The
-# actual daemon binary lives in bin/ (not next to this script) specifically
-# so there's only one obvious thing to run at the top level - see
-# GETTING-STARTED.txt. The daemon itself logs fatal errors and exits
+# Starts the daemon - from a single command. Everything internal - the
+# daemon binary, the dashboard UI's own files, its node_modules, and all
+# runtime state (data/, logs/) - lives inside bin/, so this top-level
+# folder only ever holds this script plus the docs a user actually reads -
+# see GETTING-STARTED.txt. The daemon itself logs fatal errors and exits
 # non-zero rather than dying silently; that's what actually brings it back
-# up here. State (bin/data/sentinel.db) and bin/logs/ both live inside
-# bin/, alongside the binary that owns them, and persist across restarts.
+# up here.
+#
+# The dashboard UI is started and supervised by the daemon itself
+# (src/services/ui-supervisor.ts, via Node's own child_process - the exact
+# same code path as on Windows, no bash-side backgrounding loop needed
+# here), not by this wrapper - this script only ever runs the one daemon
+# process.
 #
 # Also owns the auto-update swap (src/services/self-updater.ts stages a new
 # release under bin/.update/ and exits; this loop does the actual file swap
-# with the daemon fully exited, then relaunches) and a crash-loop rollback:
-# if the daemon crashes quickly right after a swap, twice in a row, the
-# previous version is restored and that release is blacklisted
+# with the daemon fully exited - which by then has already stopped its own
+# UI child, see ui-supervisor.ts - then relaunches) and a crash-loop
+# rollback: if the daemon crashes quickly right after a swap, twice in a
+# row, the previous version is restored and that release is blacklisted
 # (bin/.update/rollback-blocked-<version>.json) so it's never auto-retried.
 #
 # Usage: ./start.sh [minMarginPct] [maxMarginPct] [--dry-run]
@@ -31,37 +37,6 @@ fi
 
 mkdir -p bin/logs bin/.update
 
-UI_PID_FILE="bin/.update/ui.pid"
-
-start_ui() {
-  # The dashboard UI is a separate Node.js process (ui/server.js, present only
-  # if this release includes it) - started alongside the daemon, not instead
-  # of it. Node itself isn't bundled (unlike the daemon, which is a
-  # self-contained binary), so this is skipped with a clear message if it's
-  # missing rather than failing silently.
-  if [ -f "ui/server.js" ]; then
-    if command -v node >/dev/null 2>&1; then
-      (cd ui && PORT=4400 node server.js >> ../bin/logs/ui.log 2>&1 & echo $! > "../$UI_PID_FILE")
-      (
-        sleep 3
-        if command -v open >/dev/null 2>&1; then open http://localhost:4400
-        elif command -v xdg-open >/dev/null 2>&1; then xdg-open http://localhost:4400
-        fi
-      ) &
-    else
-      echo "[start] Node.js not found - the dashboard UI needs it, the daemon does not."
-      echo "[start] Install Node from https://nodejs.org, then re-run ./start.sh for the UI too."
-    fi
-  fi
-}
-
-stop_ui() {
-  if [ -f "$UI_PID_FILE" ]; then
-    kill "$(cat "$UI_PID_FILE")" 2>/dev/null
-    rm -f "$UI_PID_FILE"
-  fi
-}
-
 # The actual file swap for a staged update (src/services/self-updater.ts
 # downloads+verifies+extracts to bin/.update/staging/ and exits; this runs
 # with the daemon fully exited, so there's no self-file-lock hazard).
@@ -79,27 +54,24 @@ apply_pending_update() {
   [ -f bin/.update/pending-version.txt ] && new_version="$(cat bin/.update/pending-version.txt)"
   echo "[start] applying staged update to ${new_version}..."
 
-  stop_ui
-
   rm -f bin/invo-sentinel.prev
   mv bin/invo-sentinel bin/invo-sentinel.prev
   mv bin/.update/staging/bin/invo-sentinel bin/invo-sentinel
   chmod +x bin/invo-sentinel
 
-  rm -rf ui.prev
-  [ -d ui ] && mv ui ui.prev
-  [ -d bin/.update/staging/ui ] && mv bin/.update/staging/ui ui
+  rm -rf bin/ui.prev
+  [ -d bin/ui ] && mv bin/ui bin/ui.prev
+  [ -d bin/.update/staging/bin/ui ] && mv bin/.update/staging/bin/ui bin/ui
 
-  rm -rf node_modules.prev
-  [ -d node_modules ] && mv node_modules node_modules.prev
-  [ -d bin/.update/staging/node_modules ] && mv bin/.update/staging/node_modules node_modules
+  rm -rf bin/node_modules.prev
+  [ -d bin/node_modules ] && mv bin/node_modules bin/node_modules.prev
+  [ -d bin/.update/staging/bin/node_modules ] && mv bin/.update/staging/bin/node_modules bin/node_modules
 
   echo "$new_version" > bin/.update/pending-version-applied
   touch bin/.update/just-updated
   rm -f bin/.update/pending.json bin/.update/pending-version.txt
   rm -rf bin/.update/staging
 
-  start_ui
   echo "[start] update to ${new_version} applied"
 }
 
@@ -112,30 +84,24 @@ rollback_update() {
   local bad_version=""
   [ -f bin/.update/pending-version-applied ] && bad_version="$(cat bin/.update/pending-version-applied)"
 
-  stop_ui
-
   if [ -f bin/invo-sentinel.prev ]; then
     rm -f bin/invo-sentinel
     mv bin/invo-sentinel.prev bin/invo-sentinel
     chmod +x bin/invo-sentinel
   fi
-  if [ -d ui.prev ]; then
-    rm -rf ui
-    mv ui.prev ui
+  if [ -d bin/ui.prev ]; then
+    rm -rf bin/ui
+    mv bin/ui.prev bin/ui
   fi
-  if [ -d node_modules.prev ]; then
-    rm -rf node_modules
-    mv node_modules.prev node_modules
+  if [ -d bin/node_modules.prev ]; then
+    rm -rf bin/node_modules
+    mv bin/node_modules.prev bin/node_modules
   fi
 
   [ -n "$bad_version" ] && touch "bin/.update/rollback-blocked-${bad_version}.json"
 
   rm -f bin/.update/just-updated bin/.update/crash-count bin/.update/pending-version-applied
-
-  start_ui
 }
-
-start_ui
 
 RESTART_DELAY=5
 HEALTHY_RUN_SECONDS=20

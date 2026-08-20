@@ -4,10 +4,9 @@ Invo Sentinel - Windows quick start
 What's in this folder:
 
   start.bat   <- run this one. Double-click it. Starts everything.
-  bin\        <- the daemon program and its data/logs live in here - you
-                 don't need to touch anything in this folder directly.
-  ui\         <- the dashboard's own files - also not meant to be opened
-                 directly, start.bat handles it.
+  bin\        <- the daemon program, the dashboard UI's own files, and all
+                 data/logs live in here - you don't need to touch anything
+                 in this folder directly, start.bat handles it.
   .env.example
   README.md   <- the full project documentation (setup wizard, risk
                  config, dashboard UI, troubleshooting, everything).
