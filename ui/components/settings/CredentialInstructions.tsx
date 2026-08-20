@@ -11,7 +11,6 @@ console.log(new TextDecoder().decode(decrypted)); // 3 dot-separated parts; that
 export interface CredentialStep {
 	key: "invoRefreshToken" | "hlAgentKey" | "walletAddress";
 	label: string;
-	inputType: "textarea" | "input";
 	placeholder: string;
 	/** Where to find this one value - same extraction steps as the README's Credentials section, kept as the single source both the step-by-step wizard and the Settings page's reference read from. */
 	instructions: React.ReactNode;
@@ -22,7 +21,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "invoRefreshToken",
 		label: "Invo refresh token",
-		inputType: "textarea",
 		placeholder: "eyJ...",
 		instructions: (
 			<>
@@ -36,7 +34,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "hlAgentKey",
 		label: "Hyperliquid agent key",
-		inputType: "input",
 		placeholder: "0x...",
 		instructions: (
 			<p className="text-text-muted">
@@ -49,7 +46,6 @@ export const CREDENTIAL_STEPS: CredentialStep[] = [
 	{
 		key: "walletAddress",
 		label: "Wallet address",
-		inputType: "input",
 		placeholder: "0x...",
 		instructions: (
 			<p className="text-text-muted">
