@@ -69,6 +69,10 @@ export interface PositionState {
 	/** Snapshotted whenever known (while the portfolio is still followed) so it survives an unfollow, the same way ClosedTradeRecord.portfolioTitle does for closed trades - an open trade has no other durable source of this once its portfolio drops out of the followed list. */
 	portfolioTitle?: string;
 	ownerUsername?: string;
+	/** Invo baseId of the mirrored trade-idea investment in the user's own Trader-mode portfolio (see trader-mode-sync.ts) - absent when Trader mode was off, or the mirror attempt itself failed, at open time. */
+	traderModeInvoBaseId?: string;
+	/** The `entrySim` (% of the Trader-mode portfolio's own sim balance) last successfully synced for `traderModeInvoBaseId` - needed to compute `simDifference`/`simIncrease` on the next mirrored resize. */
+	traderModeEntrySim?: number;
 	/**
 	 * OUR OWN fill price (from HL's order response, or the live mid at
 	 * auto-adopt time) - not the trader's `investment.entryPrice`, which is
@@ -129,6 +133,23 @@ export interface RiskConfig {
 	maxMarginPct: number;
 	/** Undefined/NaN = no cap. */
 	maxLeverage?: number;
+}
+
+/**
+ * "Trader mode": mirrors every trade Sentinel opens/adjusts/closes onto a
+ * separate Invo portfolio (owned by the same Invo account already
+ * authenticated via INVO_REFRESH_TOKEN) as a paper-traded trade idea, so
+ * anyone on Invo can follow/mimic it. Off by default; a research-spike,
+ * best-effort feature - see docs/research/trader-mode-spike.md.
+ */
+export interface TraderModeConfig {
+	enabled: boolean;
+	/** The user's own Invo portfolio UUID to mirror into. Required for `enabled` to actually do anything. */
+	portfolioId?: string;
+	/** When true, also calls `posts/repost_investment` after every mirrored action so it appears on the user's Invo feed. */
+	autoShare: boolean;
+	/** Free-text caption for the feed repost; a sensible default is generated per action when blank. */
+	caption?: string;
 }
 
 /**

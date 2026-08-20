@@ -1,10 +1,11 @@
 import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
-import { loadConfig, loadRiskConfig } from '../config/env.js';
+import { loadConfig, loadRiskConfig, loadTraderModeConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
+import { TraderModeSync } from '../core/trader-mode-sync.js';
 import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { ConfigStore } from '../services/config-store.js';
@@ -114,6 +115,10 @@ async function main() {
 	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
 	const closedTradesStore = new ClosedTradesStore(dbPath, log);
 	const cycleFillsCache = new CycleFillsCache(hl);
+	// Trader mode mirrors onto a portfolio owned by this SAME Invo account
+	// (the one already authenticated via invoRefreshToken above) - reuses
+	// `invo` rather than a second client/token.
+	const traderModeSync = new TraderModeSync({ invo, log, dryRun });
 	const sync = new PositionSync({
 		hl,
 		invo,
@@ -123,6 +128,7 @@ async function main() {
 		assetMeta: meta.universe,
 		getFillsOnce: () => cycleFillsCache.getOnce(),
 		closedTrades: closedTradesStore,
+		traderModeSync,
 	});
 	const poller = new PortfolioPoller(invo, log);
 	const reconciler = new Reconciler(
@@ -137,6 +143,7 @@ async function main() {
 		cloidAttributionStore,
 		cycleFillsCache,
 		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
+		() => loadTraderModeConfig(configStore),
 		log,
 	);
 
@@ -153,6 +160,8 @@ async function main() {
 		portfolioRiskOverrides: portfolioRiskStore.load().filter((e) => e.minMarginPct != null || e.maxMarginPct != null)
 			.length,
 		dryRun,
+		traderModeEnabled: config.traderMode.enabled,
+		traderModePortfolioId: config.traderMode.portfolioId ?? null,
 	});
 
 	pingStart(config.healthcheckPingUrl, log);

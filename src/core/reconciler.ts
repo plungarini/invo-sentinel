@@ -9,7 +9,7 @@ import type { Logger } from '../services/logger.js';
 import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { resolvePortfolioRisk } from '../services/risk-policy.js';
 import type { StateStore } from '../services/state-store.js';
-import type { CloidAttributionCache, FollowedPortfolio, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig } from '../types.js';
+import type { CloidAttributionCache, FollowedPortfolio, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
 import { discoverCloidAttributedCoins, type ResolvedAttribution } from './cloid-attribution.js';
 import type { PortfolioPoller } from './portfolio-poller.js';
 import type { PositionSync } from './position-sync.js';
@@ -50,6 +50,8 @@ export class Reconciler {
 		private cycleFillsCache: CycleFillsCache,
 		/** Called once at the top of every cycle, not just at construction - a settings-page edit to the global margin band takes effect on the next cycle, not just at daemon restart. */
 		private getGlobalRisk: () => RiskConfig,
+		/** Same convention as `getGlobalRisk` - re-read fresh every cycle so a Trader-mode settings change takes effect on the next cycle. */
+		private getTraderMode: () => TraderModeConfig,
 		private log: Logger,
 	) {}
 
@@ -84,6 +86,7 @@ export class Reconciler {
 			});
 		}
 		this.lastGlobalRisk = globalRisk;
+		const traderMode = this.getTraderMode();
 
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
@@ -259,7 +262,7 @@ export class Reconciler {
 				? new Set(Object.entries(state).filter(([, s]) => s.portfolioId === portfolioId).map(([baseId]) => baseId))
 				: null;
 
-			await this.processPortfolioInvestments(portfolioId, title, investments, risk, state, investmentsByCoin, ignored, allowedBaseIds);
+			await this.processPortfolioInvestments(portfolioId, title, investments, risk, traderMode, state, investmentsByCoin, ignored, allowedBaseIds);
 		}
 
 		// Never blocks the rest of the cycle on failure - same as every other
@@ -271,7 +274,7 @@ export class Reconciler {
 		// reporting the daemon as down for what should have been a
 		// transient, gracefully-tolerated hiccup like any other).
 		try {
-			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds, globalRisk);
+			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds, globalRisk, traderMode);
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'cloid_attribution_discovery', message: e.message });
 		}
@@ -317,7 +320,7 @@ export class Reconciler {
 				let stateChanged = false;
 				for (const [baseId] of detachedEntries) {
 					const wasTracked = !!state[baseId];
-					this.sync.finalizeIfDetachedPositionClosed(baseId, state, livePositions);
+					await this.sync.finalizeIfDetachedPositionClosed(baseId, state, livePositions, traderMode);
 					if (wasTracked && !state[baseId]) {
 						this.loggedDetachedBaseIds.delete(baseId);
 						stateChanged = true;
@@ -352,6 +355,7 @@ export class Reconciler {
 		portfolioTitle: string | undefined,
 		investments: OpenInvestment[],
 		risk: RiskConfig,
+		traderMode: TraderModeConfig,
 		state: PositionStateMap,
 		investmentsByCoin: Map<string, OpenInvestment[]>,
 		ignored: IgnoredTradesMap,
@@ -362,7 +366,7 @@ export class Reconciler {
 
 		for (const investment of relevantInvestments) {
 			try {
-				await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk);
+				await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk, traderMode);
 			} catch (e: any) {
 				this.log({
 					type: 'error',
@@ -382,7 +386,7 @@ export class Reconciler {
 			if (entry.portfolioId !== portfolioId) continue;
 			if (openBaseIds.has(baseId)) continue;
 			try {
-				await this.sync.close(baseId, state, portfolioTitle);
+				await this.sync.close(baseId, state, traderMode, portfolioTitle);
 			} catch (e: any) {
 				this.log({ type: 'error', source: 'close', baseId, coin: entry.coin, message: e.message });
 			}
@@ -420,6 +424,7 @@ export class Reconciler {
 		followedPortfolioIds: Set<string>,
 		adHocPortfolioIds: Set<string>,
 		globalRisk: RiskConfig,
+		traderMode: TraderModeConfig,
 	): Promise<void> {
 		const positions = await this.hl.getPositions();
 		const { resolved } = await discoverCloidAttributedCoins(this.hl, this.invo, positions, state, cloidCache, this.log);
@@ -470,7 +475,7 @@ export class Reconciler {
 				const originalCoinInvestments = investmentsByCoin.get(coin);
 				investmentsByCoin.set(coin, [investment]);
 				try {
-					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk);
+					await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk, traderMode);
 				} catch (e: any) {
 					this.log({ type: 'error', source: 'cloid_adopt', baseId: investment.baseId, coin, message: e.message });
 					continue;

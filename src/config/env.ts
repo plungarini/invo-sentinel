@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import type { ConfigStore } from '../services/config-store.js';
-import type { RiskConfig } from '../types.js';
+import type { RiskConfig, TraderModeConfig } from '../types.js';
 import type { StaleEntryConfig } from '../services/stale-entry-policy.js';
 
 export interface AppConfig {
@@ -18,6 +18,7 @@ export interface AppConfig {
 	logMaxTotalMb: number;
 	/** Optional external monitoring ping (e.g. healthchecks.io), fired after every poll cycle. Unset = disabled. */
 	healthcheckPingUrl?: string;
+	traderMode: TraderModeConfig;
 }
 
 export const DEFAULT_LOG_RETENTION_HOURS = 24;
@@ -71,6 +72,22 @@ export function loadRiskConfig(
 }
 
 /**
+ * Reads Trader-mode settings - split out from `loadConfig` for the same
+ * reason as `loadRiskConfig`: `Reconciler.run()` re-resolves it fresh every
+ * cycle so a settings-page edit takes effect on the next cycle, not just at
+ * daemon restart, without paying for a full config read on every other field.
+ */
+export function loadTraderModeConfig(configStore: ConfigStore): TraderModeConfig {
+	const stored = configStore.load();
+	return {
+		enabled: readValue(stored, 'traderModeEnabled', 'TRADER_MODE_ENABLED') === 'true',
+		portfolioId: readValue(stored, 'traderModePortfolioId', 'TRADER_MODE_PORTFOLIO_ID') || undefined,
+		autoShare: readValue(stored, 'traderModeAutoShare', 'TRADER_MODE_AUTO_SHARE') === 'true',
+		caption: readValue(stored, 'traderModeCaption', 'TRADER_MODE_CAPTION') || undefined,
+	};
+}
+
+/**
  * Loads and validates config from `ConfigStore` (sentinel.db), falling back
  * to `process.env`/`.env` for anything not yet set in the DB. Async so a
  * future `ConfigStore` backend needing real I/O doesn't force another
@@ -113,5 +130,6 @@ export async function loadConfig(
 		logRetentionHours: parseFloat(readValue(stored, 'logRetentionHours', 'LOG_RETENTION_HOURS')) || DEFAULT_LOG_RETENTION_HOURS,
 		logMaxTotalMb: parseFloat(readValue(stored, 'logMaxTotalMb', 'LOG_MAX_TOTAL_MB')) || DEFAULT_LOG_MAX_TOTAL_MB,
 		healthcheckPingUrl: readValue(stored, 'healthcheckPingUrl', 'HEALTHCHECK_PING_URL') || undefined,
+		traderMode: loadTraderModeConfig(configStore),
 	};
 }
