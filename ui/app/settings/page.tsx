@@ -28,7 +28,11 @@ export default async function SettingsPage() {
 					</Card>
 
 					<Card title="Risk & tuning">
-						<TuningSettingsForm defaultValues={tuning} />
+						{/* Keyed on content for the same reason as the Trader mode form
+						below - the stale-entry guardrail toggles here are controlled
+						checkboxes too, subject to the same React 19 form auto-reset
+						desync. */}
+						<TuningSettingsForm key={JSON.stringify(tuning)} defaultValues={tuning} />
 					</Card>
 
 					<Card title="Trader mode">

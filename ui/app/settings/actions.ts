@@ -114,6 +114,8 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 
 		const staleEntryMaxAgeMinutes = requireNumber(formData, "staleEntryMaxAgeMinutes", { min: 0 });
 		const staleEntryMaxProfitPct = requireNumber(formData, "staleEntryMaxProfitPct", { min: 0 });
+		const staleEntryMaxAgeEnabled = formData.get("staleEntryMaxAgeEnabled") === "on";
+		const staleEntryMaxProfitEnabled = formData.get("staleEntryMaxProfitEnabled") === "on";
 		const pollIntervalMs = requireNumber(formData, "pollIntervalMs");
 		const logRetentionHours = requireNumber(formData, "logRetentionHours", { min: 0 });
 		const logMaxTotalMb = requireNumber(formData, "logMaxTotalMb", { min: 0 });
@@ -125,6 +127,8 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 			maxMarginPct: String(maxMarginPct),
 			staleEntryMaxAgeMinutes: String(staleEntryMaxAgeMinutes),
 			staleEntryMaxProfitPct: String(staleEntryMaxProfitPct),
+			staleEntryMaxAgeEnabled: String(staleEntryMaxAgeEnabled),
+			staleEntryMaxProfitEnabled: String(staleEntryMaxProfitEnabled),
 			pollIntervalMs: String(pollIntervalMs),
 			logRetentionHours: String(logRetentionHours),
 			logMaxTotalMb: String(logMaxTotalMb),
