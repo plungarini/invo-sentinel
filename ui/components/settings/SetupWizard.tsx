@@ -103,7 +103,7 @@ export default function SetupWizard({ prefill }: { prefill: WizardPrefill }) {
 							<SecretField
 								name={s.key}
 								currentValue={currentValueFor(s.key) || undefined}
-								secret={s.key !== "walletAddress"}
+								clearOnFocus={s.key !== "walletAddress"}
 								onChange={(v) => setValues((prev) => ({ ...prev, [s.key]: v }))}
 								placeholder={s.placeholder}
 								hint={currentValueFor(s.key) ? "Click to edit, or continue to keep this value." : undefined}

@@ -55,7 +55,7 @@ export default function RequiredSecretsForm({
 				label="Wallet address"
 				name="walletAddress"
 				currentValue={walletAddress || undefined}
-				secret={false}
+				clearOnFocus={false}
 				placeholder="0x..."
 				hint={editing ? "Click to edit, or leave as-is to keep the current value." : undefined}
 				required={!editing}

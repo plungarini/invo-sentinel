@@ -6,21 +6,29 @@ import { fieldInputClass } from "./Field";
 /**
  * Renders `currentValue` as the field's actual displayed content (not a
  * placeholder) - masked already upstream for a real secret, shown in full
- * for a non-secret value like a wallet address. `secret` controls whether
- * that's dotted out via `type="password"` (reveal-on-focus via
- * `type="text"`); non-secret fields stay `type="text"` throughout but keep
- * the same interaction otherwise. Focusing clears the field so typing
- * replaces `currentValue` outright rather than appending to it; blurring
- * with nothing typed restores it. The real submitted `name`d input is a
- * separate hidden field that only ever carries what was actually typed -
- * `currentValue` itself is never a valid submission, so blank still means
- * "leave the current value unchanged" to the server action.
+ * for a non-secret value like a wallet address. `type="password"` while
+ * blurred, `type="text"` while focused, for every field - a wallet address
+ * isn't actually secret, but is dotted out at rest the same way for visual
+ * consistency with the two real secrets next to it.
+ *
+ * `clearOnFocus` (default on, matching the two real secrets) empties the
+ * field the moment it's focused, so typing a new value replaces
+ * `currentValue` outright rather than requiring it to be selected/deleted
+ * first - right for pasting in a brand new secret. Set it off for a field
+ * meant to be read/copied/edited in place (e.g. the wallet address): focus
+ * just reveals the real value as plain text, unmolested, and the user edits
+ * it like any normal text field.
+ *
+ * Either way, the real submitted `name`d input is a separate hidden field
+ * that only ever carries what was actually typed - `currentValue` itself is
+ * never a valid submission, so blank still means "leave the current value
+ * unchanged" to the server action.
  */
 export default function SecretField({
 	label,
 	name,
 	currentValue,
-	secret = true,
+	clearOnFocus = true,
 	placeholder,
 	hint,
 	required,
@@ -30,7 +38,7 @@ export default function SecretField({
 	label?: string;
 	name: string;
 	currentValue?: string;
-	secret?: boolean;
+	clearOnFocus?: boolean;
 	placeholder?: string;
 	hint?: string;
 	required?: boolean;
@@ -49,13 +57,13 @@ export default function SecretField({
 		<label className="flex flex-col gap-1.5">
 			{label && <span className="text-[13px] font-semibold text-text-muted">{label}</span>}
 			<input
-				type={secret && !focused ? "password" : "text"}
+				type={focused ? "text" : "password"}
 				value={displayValue}
 				placeholder={placeholder}
 				required={required && !currentValue}
 				onFocus={() => {
 					setFocused(true);
-					if (showingCurrent) setCleared(true);
+					if (showingCurrent && clearOnFocus) setCleared(true);
 				}}
 				onBlur={() => {
 					setFocused(false);
