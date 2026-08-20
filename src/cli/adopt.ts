@@ -1,9 +1,10 @@
 import { randomBytes } from 'crypto';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { loadConfig } from '../config/env.js';
+import { ConfigStore } from '../services/config-store.js';
 import { createLogger } from '../services/logger.js';
+import { resolveRootDir } from '../services/root-dir.js';
 import { StateStore } from '../services/state-store.js';
 
 // One-off manual fixup for the genuinely ambiguous case Reconciler can't
@@ -14,7 +15,7 @@ import { StateStore } from '../services/state-store.js';
 // so future signals for that baseId are recognized (adjust/close) instead
 // of tripping existing_position_conflict or being silently ignored.
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_DIR = resolveRootDir(import.meta.url);
 
 function genBaseShortId(): string {
 	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
@@ -48,7 +49,12 @@ async function main() {
 		process.exit(1);
 	}
 
-	const config = loadConfig();
+	const configStore = new ConfigStore(join(ROOT_DIR, 'data/sentinel.db'));
+	const config = await loadConfig(configStore);
+	if (!config.configured) {
+		console.error(`Not configured yet: missing ${config.missing.join(', ')}. Run the setup wizard in the dashboard, or set these in .env.`);
+		process.exit(1);
+	}
 	const log = createLogger({
 		name: 'adopt',
 		dir: join(ROOT_DIR, 'logs'),

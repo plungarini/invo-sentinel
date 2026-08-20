@@ -12,6 +12,8 @@ export interface LoggerOptions {
 	dir: string;
 	retentionHours: number;
 	maxTotalMb: number;
+	/** Skip the raw JSON-line mirror to stdout (file logging is unaffected) - for when something else owns the terminal, e.g. `console-tui.ts`'s redraw loop, which would otherwise be interleaved with/scrolled away by raw log lines. */
+	quiet?: boolean;
 }
 
 /**
@@ -22,7 +24,7 @@ export interface LoggerOptions {
  * files evicted first); so a burst of activity can't fill the disk even
  * within the retention window.
  */
-export function createLogger({ name, dir, retentionHours, maxTotalMb }: LoggerOptions): Logger {
+export function createLogger({ name, dir, retentionHours, maxTotalMb, quiet = false }: LoggerOptions): Logger {
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
 	const retentionMs = retentionHours * 60 * 60 * 1000;
@@ -77,7 +79,7 @@ export function createLogger({ name, dir, retentionHours, maxTotalMb }: LoggerOp
 
 	return function log(obj: Record<string, unknown>) {
 		const line = JSON.stringify({ ts: new Date().toISOString(), ...obj });
-		console.log(line);
+		if (!quiet) console.log(line);
 		try {
 			appendFileSync(currentFile(), line + '\n');
 		} catch {

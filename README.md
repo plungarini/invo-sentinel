@@ -7,7 +7,8 @@ Forked from [`AKCodez/invo-copy-trader`](https://github.com/AKCodez/invo-copy-tr
 ## Contents
 
 - [What it does](#what-it-does)
-- [Quick start](#quick-start)
+- [Easy install (no terminal)](#easy-install-no-terminal)
+- [Quick start (from source)](#quick-start-from-source)
 - [Credentials](#credentials)
 - [Risk configuration](#risk-configuration)
 - [Commands](#commands)
@@ -28,7 +29,22 @@ Every poll cycle (default 5s):
 4. Anything you're tracking that's no longer in a trader's open list gets closed fully, unclamped.
 5. Cross-checks your real Hyperliquid positions against what's tracked, and flags anything untracked instead of silently ignoring it.
 
-## Quick start
+## Easy install (no terminal)
+
+For anyone who just wants everything running without `git clone` or a terminal full of commands - Windows, macOS, and Linux all get their own release download, not just Windows:
+
+1. Grab the archive for your OS from this repo's [Releases](../../releases) page and unzip it anywhere: `invo-sentinel-windows-x64.zip`, `invo-sentinel-macos-arm64.zip`, or `invo-sentinel-linux-x64.zip`.
+2. Open `GETTING-STARTED.txt` inside - it's a short, platform-specific version of just this section, generated fresh for your OS.
+3. Run `start.bat` (Windows, double-click) or `./start.sh` (macOS/Linux, from a terminal - macOS also needs a one-time Gatekeeper bypass, see `GETTING-STARTED.txt`). This is the **only** thing you need to run - it starts both the daemon and the dashboard UI, and opens the UI in your browser once it's up. The actual daemon program and its data/logs live inside the `bin/` folder, and the dashboard's own files live inside `ui/` - neither is meant to be opened directly; keeping them out of the top level is deliberate, so there's exactly one obvious file to run instead of several similarly-important-looking ones. A console window/terminal stays open while it runs - closing it stops everything (see [Running continuously](#running-continuously) below for keeping it running unattended, including across reboots, or run `start.bat --background` / `./start.sh --background` to free the window immediately).
+4. Everything starts idle and waits for the 3 required values from [Credentials](#credentials) below - nothing crashes or exits if they're missing. The dashboard's own setup wizard is the easiest way to supply them.
+
+**One real dependency the daemon itself doesn't have:** the dashboard UI needs Node.js installed (the daemon is a fully self-contained executable and needs nothing). If Node isn't found, `start.bat`/`start.sh` say so plainly and still start the daemon on its own - install Node from [nodejs.org](https://nodejs.org) and re-run for the UI too.
+
+The wrapper script restarts the daemon automatically if it crashes, same as `scripts/run.sh` does for the from-source setup below.
+
+## Quick start (from source)
+
+Everything below this point is the developer/source path - cloning the repo and running it with Node - which the easy-install path above exists to avoid.
 
 ```bash
 npm install
@@ -98,11 +114,11 @@ Hyperliquid rejects any order under $10 notional. A brand-new open that computes
 ## Commands
 
 | Command                                                                 | What it does                                                                  |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `npm run preflight`                                                     | Env, Hyperliquid connection, Invo auth, balance/positions - run this first     |
-| `npm run dry-run`                                                       | Full pipeline, no real orders; everything logged as `dry_run_*`              |
-| `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                          |
-| `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict                       |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `npm run preflight`                                                     | Env, Hyperliquid connection, Invo auth, balance/positions - run this first    |
+| `npm run dry-run`                                                       | Full pipeline, no real orders; everything logged as `dry_run_*`               |
+| `npm start` / `./scripts/run.sh`                                        | The real thing. `run.sh` adds auto-restart on crash                           |
+| `npm run adopt -- <baseId> <coin> <long\|short> <leverage> <marginUsd>` | Manually resolve a same-coin-multiple-traders conflict                        |
 | `npm run close -- <coin>`                                               | Emergency manual close; stopping the daemon does **not** close open positions |
 | `npm run reconcile -- --hours=6`                                        | Read-only audit; see below                                                    |
 
@@ -135,6 +151,10 @@ Port defaults to 4400; copy `ui/.env.local.example` to `ui/.env.local` to change
 
 ![Tools](docs/screenshots/tools.png)
 
+**Settings** - quick configuration for full daemon setup and preferences.
+
+![Settings](docs/screenshots/settings.png)
+
 The right rail lists your followed portfolios; clicking one opens the same detail view as the Tools page.
 
 ## Auditing (`npm run reconcile`)
@@ -143,7 +163,16 @@ The live daemon's own logs record what it _decided_, not proof it was right. `np
 
 ## Running continuously
 
-`scripts/run.sh` restarts the daemon if the process exits, but nothing brings it back after a reboot on its own - for that, use your OS's service manager.
+`scripts/run.sh`/`start.bat` restart the daemon if the process exits, but nothing brings it back after a reboot on its own - for that, use your OS's service manager.
+
+**Windows (packaged `start.bat`, no admin rights needed):**
+
+The simplest option - a Startup folder shortcut - starts `start.bat` at login, and `start.bat`'s own loop already covers restart-on-crash:
+
+1. Press `Win+R`, type `shell:startup`, Enter - this opens your per-user Startup folder.
+2. Right-click → New → Shortcut, point it at `start.bat` (wherever you unzipped the release), and give it a `Start in` folder matching that same directory (Shortcut Properties → "Start in") - `start.bat` resolves paths relative to its own location, but a shortcut's default working directory isn't always that folder, so this avoids it looking for the daemon binary in the wrong place.
+
+For running before any user logs in (e.g. a headless machine that reboots unattended), use **Task Scheduler** instead: Create Task → Triggers → "At startup" → Actions → Start a program (`start.bat`, "Start in" set to its folder) → Settings → check "Restart the task if it fails" as a second layer on top of `start.bat`'s own loop. Task Scheduler's own restart setting matters here specifically because it's the only one of these two options that also recovers from the _console window itself_ being closed, not just the daemon process crashing inside it.
 
 **Linux (systemd, user service, no `sudo`):**
 

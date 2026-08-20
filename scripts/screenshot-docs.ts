@@ -1,5 +1,5 @@
-import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
 
 // Lossless PNG at the exact viewport size (no devicePixelRatio scaling) is what
 // makes these sharp - a browser-extension screenshot tool that re-encodes to a
@@ -14,6 +14,7 @@ const PAGES: { path: string; file: string; waitForText: string }[] = [
 	{ path: '/analytics', file: 'analytics.png', waitForText: 'Cumulative PnL' },
 	{ path: '/wallet', file: 'wallet.png', waitForText: 'Total Balance' },
 	{ path: '/tools', file: 'tools.png', waitForText: 'Portfolio Analysis' },
+	{ path: '/settings', file: 'settings.png', waitForText: 'Settings' },
 ];
 
 async function main() {

@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
 	try {
-		return NextResponse.json(loadStatus());
+		return NextResponse.json(await loadStatus());
 	} catch (e) {
 		return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
 	}

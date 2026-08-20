@@ -1,6 +1,7 @@
-import DatabaseConstructor, { type Database } from 'better-sqlite3';
+import type { Database } from 'better-sqlite3';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
+import { openDatabase } from './sqlite-adapter.js';
 
 /**
  * One connection per db file, shared across every *-store.ts in this
@@ -18,7 +19,7 @@ export function openDb(path: string): Database {
 
 	mkdirSync(dirname(path), { recursive: true });
 	const isNew = !existsSync(path);
-	const db = new DatabaseConstructor(path);
+	const db = openDatabase(path);
 	// WAL so the UI's read-only connection is never blocked by the daemon's
 	// writes (or vice versa) - both open the same file concurrently.
 	db.pragma('journal_mode = WAL');
@@ -66,6 +67,11 @@ function runMigrations(db: Database): void {
 		CREATE TABLE IF NOT EXISTS followed_portfolios (
 			id TEXT PRIMARY KEY,
 			data TEXT NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS app_config (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
 		);
 
 		CREATE TABLE IF NOT EXISTS closed_trades (

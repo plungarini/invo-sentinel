@@ -1,9 +1,10 @@
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { HyperliquidClient, extractAvgFillPrice, orderFillError } from '../clients/hyperliquid-client.js';
 import { loadConfig } from '../config/env.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
+import { ConfigStore } from '../services/config-store.js';
 import { createLogger } from '../services/logger.js';
+import { resolveRootDir } from '../services/root-dir.js';
 import { StateStore } from '../services/state-store.js';
 
 // Manual emergency stop for one coin. Stopping auto-copy.ts (Ctrl+C) does
@@ -13,7 +14,7 @@ import { StateStore } from '../services/state-store.js';
 // too, so the daemon doesn't try to act on a position that no longer
 // exists.
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_DIR = resolveRootDir(import.meta.url);
 
 async function main() {
 	const [coin] = process.argv.slice(2);
@@ -22,7 +23,12 @@ async function main() {
 		process.exit(1);
 	}
 
-	const config = loadConfig();
+	const configStore = new ConfigStore(join(ROOT_DIR, 'data/sentinel.db'));
+	const config = await loadConfig(configStore);
+	if (!config.configured) {
+		console.error(`Not configured yet: missing ${config.missing.join(', ')}. Run the setup wizard in the dashboard, or set these in .env.`);
+		process.exit(1);
+	}
 	const log = createLogger({
 		name: 'close-position',
 		dir: join(ROOT_DIR, 'logs'),

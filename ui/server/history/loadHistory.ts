@@ -66,7 +66,7 @@ export const loadHistory = staleWhileRevalidate(fetchHistory, CACHE_TTL_MS);
  * of each paying its own round trip.
  */
 const loadClosedInvestments = keyedStaleWhileRevalidate(
-	(portfolioId: string) => getInvoClient().getClosedInvestments(portfolioId, 1, 30).catch(() => []),
+	async (portfolioId: string) => (await getInvoClient()).getClosedInvestments(portfolioId, 1, 30).catch(() => []),
 	CACHE_TTL_MS,
 );
 const loadFollowedPortfoliosForEnrichment = staleWhileRevalidate(async () => readFollowedPortfolios(), CACHE_TTL_MS);
