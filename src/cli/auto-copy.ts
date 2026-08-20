@@ -21,6 +21,7 @@ import { isCompiledBuild, resolveRootDir } from '../services/root-dir.js';
 import { isVersionRollbackBlocked, performUpdate } from '../services/self-updater.js';
 import { StateStore } from '../services/state-store.js';
 import { checkForUpdate } from '../services/update-checker.js';
+import { startUiSupervisor, type UiSupervisor } from '../services/ui-supervisor.js';
 import { APP_VERSION } from '../version.js';
 
 // No Claude/LLM in this loop. Mechanically mirrors every open/adjust/close
@@ -63,7 +64,7 @@ const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
  * detect the pending-update marker and perform the actual file swap with
  * this process fully exited (no self-file-lock hazard on any OS).
  */
-function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Logger) {
+function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Logger, uiSupervisor: UiSupervisor) {
 	let nextCheckAt = isCompiledBuild() ? Date.now() : Infinity;
 	return async function maybeCheckForUpdate(): Promise<void> {
 		if (!isCompiledBuild()) return;
@@ -87,6 +88,10 @@ function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Log
 		const staged = await performUpdate({ rootDir, asset: result.asset, latestVersion: result.latestVersion, log });
 		if (staged) {
 			log({ type: 'update_restarting', fromVersion: APP_VERSION, toVersion: result.latestVersion });
+			// The wrapper script swaps bin/ui/'s files the moment this process
+			// exits - the UI child has to be actually gone first, not just
+			// signaled, or the swap can race a still-running node process.
+			await uiSupervisor.stop();
 			process.exit(42);
 		}
 	};
@@ -115,12 +120,18 @@ async function main() {
 	const log: Logger = tui ? (obj) => { rawLog(obj); tui.onLog(obj); } : rawLog;
 	configStore.setLogger(log);
 
+	// Started before the setup-wizard wait below, not after - the dashboard
+	// (including the wizard itself) has to be reachable on a completely
+	// unconfigured first run, not just once the daemon is fully up.
+	const uiSupervisor = startUiSupervisor({ rootDir: ROOT_DIR, log });
+
 	// Never let an unforeseen error kill the process silently. Log fully
 	// (stdout + logs/) and exit non-zero so a process supervisor (pm2,
 	// systemd Restart=always, or scripts/run.sh) can restart clean; safer
 	// than trying to "keep going" after truly unexpected state.
 	process.on('uncaughtException', async (err) => {
 		log({ type: 'fatal', source: 'uncaughtException', message: err.message, stack: err.stack });
+		await uiSupervisor.stop();
 		await pingFailAwaited(config.healthcheckPingUrl);
 		process.exit(1);
 	});
@@ -131,9 +142,20 @@ async function main() {
 			message: reason?.message ?? String(reason),
 			stack: reason?.stack,
 		});
+		await uiSupervisor.stop();
 		await pingFailAwaited(config.healthcheckPingUrl);
 		process.exit(1);
 	});
+	// No handler installed previously - Node's default SIGINT/SIGTERM
+	// behavior exits immediately without a chance to stop the UI child
+	// first, which would leave it orphaned (and fighting the next start for
+	// port 4400) on a plain Ctrl+C or `stop.bat`/service-manager shutdown.
+	for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+		process.on(signal, async () => {
+			await uiSupervisor.stop();
+			process.exit(0);
+		});
+	}
 
 	// First run on a fresh install: no crash-on-missing-config, just idle
 	// until the setup wizard (or a hand-edited .env) supplies the 3 required
@@ -217,7 +239,7 @@ async function main() {
 		emergencyFullStop: config.emergency.fullStop,
 	});
 
-	const maybeCheckForUpdate = createUpdateChecker(ROOT_DIR, configStore, log);
+	const maybeCheckForUpdate = createUpdateChecker(ROOT_DIR, configStore, log, uiSupervisor);
 
 	pingStart(config.healthcheckPingUrl, log);
 	const first = await reconciler.run();
