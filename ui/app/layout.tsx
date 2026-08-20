@@ -4,6 +4,8 @@ import Sidebar from "@/components/layout/Sidebar";
 import MobileTabBar from "@/components/layout/MobileTabBar";
 import RightRail from "@/components/layout/RightRail";
 import ServiceWorkerRegister from "@/components/layout/ServiceWorkerRegister";
+import SetupWizard from "@/components/settings/SetupWizard";
+import { getWizardPrefill, shouldShowSetupWizard } from "@/server/daemon/settings";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -43,22 +45,29 @@ function RightRailSkeleton() {
 	);
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+	const needsSetup = await shouldShowSetupWizard();
+	const wizardPrefill = needsSetup ? await getWizardPrefill() : null;
+
 	return (
 		<html lang="en" className="dark">
 			<body className="h-screen overflow-hidden bg-bg text-text font-sans antialiased">
-				<div className="mx-auto flex h-screen max-w-[1440px] overflow-hidden">
-					<Sidebar />
-					<main className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 sm:px-6 md:pt-6">
-						<div className="mx-auto flex h-full min-h-0 w-full max-w-[760px] flex-col">{children}</div>
-					</main>
-					{/* Tablet width (md-xl) drops the real rail but keeps its column so the
-					layout matches invoapp's own split view instead of stretching content edge-to-edge. */}
-					<aside className="hidden w-16 shrink-0 md:block xl:hidden" aria-hidden />
-					<Suspense fallback={<RightRailSkeleton />}>
-						<RightRail />
-					</Suspense>
-				</div>
+				{needsSetup && wizardPrefill ? (
+					<SetupWizard prefill={wizardPrefill} />
+				) : (
+					<div className="mx-auto flex h-screen max-w-[1440px] overflow-hidden">
+						<Sidebar />
+						<main className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 sm:px-6 md:pt-6">
+							<div className="mx-auto flex h-full min-h-0 w-full max-w-[760px] flex-col">{children}</div>
+						</main>
+						{/* Tablet width (md-xl) drops the real rail but keeps its column so the
+						layout matches invoapp's own split view instead of stretching content edge-to-edge. */}
+						<aside className="hidden w-16 shrink-0 md:block xl:hidden" aria-hidden />
+						<Suspense fallback={<RightRailSkeleton />}>
+							<RightRail />
+						</Suspense>
+					</div>
+				)}
 				<MobileTabBar />
 				<ServiceWorkerRegister />
 			</body>

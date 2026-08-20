@@ -1,10 +1,11 @@
-import { HomeIcon, ActivityIcon, WalletIcon, WrenchToolIcon } from "@/components/icons/Icons";
+import { HomeIcon, ActivityIcon, WalletIcon, WrenchToolIcon, SettingsIcon } from "@/components/icons/Icons";
 
 export const NAV_LINKS = [
 	{ href: "/", label: "Overview", icon: HomeIcon },
 	{ href: "/analytics", label: "Analytics", icon: ActivityIcon },
 	{ href: "/wallet", label: "Wallet", icon: WalletIcon },
 	{ href: "/tools", label: "Tools", icon: WrenchToolIcon },
+	{ href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 /** Prefix-aware match so nested routes (e.g. a trade detail deep link under /wallet) still highlight their parent section. */

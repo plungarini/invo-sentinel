@@ -10,11 +10,11 @@ import type { AnalyticsSummary } from "@/types/ui";
 export const dynamic = "force-dynamic";
 
 export default async function OverviewPage() {
-	const initialStatus = loadStatus();
 	// initialAnalytics is only for the footer's All-time PnL/Win Rate - the Fees
 	// stat itself uses the lightweight loadFeesTotal (see loadFeesTotal's doc),
 	// same as Wallet, so neither page's Fees figure depends on a live HL fetch.
-	const [initialWallet, initialAnalytics, initialFees] = await Promise.all([
+	const [initialStatus, initialWallet, initialAnalytics, initialFees] = await Promise.all([
+		loadStatus(),
 		loadWallet().catch((): WalletResponse | undefined => undefined),
 		loadAnalytics().catch((): AnalyticsSummary | undefined => undefined),
 		loadFeesTotal().catch((): { totalFeesUsd: number } | undefined => undefined),
