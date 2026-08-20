@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
-import { loadConfig, loadRiskConfig, loadTraderModeConfig } from '../config/env.js';
+import { loadConfig, loadEmergencyConfig, loadRiskConfig, loadTraderModeConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
@@ -144,6 +144,7 @@ async function main() {
 		cycleFillsCache,
 		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
 		() => loadTraderModeConfig(configStore),
+		() => loadEmergencyConfig(configStore),
 		log,
 	);
 
@@ -162,6 +163,8 @@ async function main() {
 		dryRun,
 		traderModeEnabled: config.traderMode.enabled,
 		traderModePortfolioId: config.traderMode.portfolioId ?? null,
+		emergencyNoNewPositions: config.emergency.noNewPositions,
+		emergencyFullStop: config.emergency.fullStop,
 	});
 
 	pingStart(config.healthcheckPingUrl, log);
@@ -175,16 +178,28 @@ async function main() {
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 
+	// Full-stop means every cycle is a no-op fetch-nothing early return (see
+	// reconciler.ts) - cheap either way, but there's no reason to burn a full
+	// pollIntervalMs-paced loop iteration (plus its cycle_start/cycle_complete
+	// log pair) doing literally nothing; back off to a slow idle cadence
+	// instead, same idea as the pre-configured await-setup loop above.
+	const FULL_STOP_IDLE_MS = 30_000;
+
 	while (true) {
 		// Scales the gap between cycles up once enough portfolios are followed
 		// that the configured pollIntervalMs alone would exceed Invo's own
 		// Cloudflare rate limit (500 req/300s per IP, confirmed live
 		// 2026-08-11) - see poll-schedule.ts. A no-op at typical follow counts.
 		const extraCallsPerCycle = adHocPortfolioCount; // one get_investments per ad-hoc (manually-mimicked) portfolio
-		const delayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
-		if (delayMs > config.pollIntervalMs) {
-			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs });
+		const safeDelayMs = computeSafePollIntervalMs(followedPortfolioCount, config.pollIntervalMs, extraCallsPerCycle);
+		if (safeDelayMs > config.pollIntervalMs) {
+			log({ type: 'poll_interval_throttled', followedPortfolioCount, adHocPortfolioCount, pollIntervalMs: config.pollIntervalMs, delayMs: safeDelayMs });
 		}
+		// Re-read fresh every iteration (not just once at boot) so a
+		// settings-page full-stop toggle slows the loop down on the very next
+		// wait, not just once the daemon happens to restart.
+		const fullStop = loadEmergencyConfig(configStore).fullStop;
+		const delayMs = fullStop ? Math.max(safeDelayMs, FULL_STOP_IDLE_MS) : safeDelayMs;
 		await new Promise((r) => setTimeout(r, delayMs));
 		pingStart(config.healthcheckPingUrl, log);
 		try {

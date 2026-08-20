@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import type { ConfigStore } from '../services/config-store.js';
-import type { RiskConfig, TraderModeConfig } from '../types.js';
+import type { EmergencyConfig, RiskConfig, TraderModeConfig } from '../types.js';
 import type { StaleEntryConfig } from '../services/stale-entry-policy.js';
 
 export interface AppConfig {
@@ -19,6 +19,7 @@ export interface AppConfig {
 	/** Optional external monitoring ping (e.g. healthchecks.io), fired after every poll cycle. Unset = disabled. */
 	healthcheckPingUrl?: string;
 	traderMode: TraderModeConfig;
+	emergency: EmergencyConfig;
 }
 
 export const DEFAULT_LOG_RETENTION_HOURS = 24;
@@ -88,6 +89,21 @@ export function loadTraderModeConfig(configStore: ConfigStore): TraderModeConfig
 }
 
 /**
+ * Reads the two global emergency toggles - split out from `loadConfig` for
+ * the same reason as `loadRiskConfig`/`loadTraderModeConfig`: `Reconciler.run()`
+ * and the main poll loop both re-resolve this fresh every cycle, so flipping
+ * either switch on the settings page takes effect on the next cycle, not
+ * just at daemon restart. Both default to off (absence = false).
+ */
+export function loadEmergencyConfig(configStore: ConfigStore): EmergencyConfig {
+	const stored = configStore.load();
+	return {
+		noNewPositions: readValue(stored, 'emergencyNoNewPositions', 'EMERGENCY_NO_NEW_POSITIONS') === 'true',
+		fullStop: readValue(stored, 'emergencyFullStop', 'EMERGENCY_FULL_STOP') === 'true',
+	};
+}
+
+/**
  * Loads and validates config from `ConfigStore` (sentinel.db), falling back
  * to `process.env`/`.env` for anything not yet set in the DB. Async so a
  * future `ConfigStore` backend needing real I/O doesn't force another
@@ -135,5 +151,6 @@ export async function loadConfig(
 		logMaxTotalMb: parseFloat(readValue(stored, 'logMaxTotalMb', 'LOG_MAX_TOTAL_MB')) || DEFAULT_LOG_MAX_TOTAL_MB,
 		healthcheckPingUrl: readValue(stored, 'healthcheckPingUrl', 'HEALTHCHECK_PING_URL') || undefined,
 		traderMode: loadTraderModeConfig(configStore),
+		emergency: loadEmergencyConfig(configStore),
 	};
 }

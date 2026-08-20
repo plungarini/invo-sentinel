@@ -66,6 +66,10 @@ export class PositionSync {
 	 * it per-portfolio (see `resolvePortfolioRisk`) since a followed
 	 * portfolio may have its own margin-band override. `traderMode` is
 	 * likewise per-call (re-read fresh every cycle), same convention as `risk`.
+	 * `noNewPositions` (the emergency "don't open new positions" switch) only
+	 * blocks the genuinely-brand-new-order path below; adjusts, closes, and
+	 * auto-adopting an already-real pre-existing position (no new capital,
+	 * no new order) are unaffected.
 	 */
 	async openOrAdjust(
 		baseId: string,
@@ -75,6 +79,7 @@ export class PositionSync {
 		ignored: IgnoredTradesMap,
 		risk: RiskConfig,
 		traderMode: TraderModeConfig,
+		noNewPositions = false,
 	): Promise<void> {
 		const { log, staleEntry, dryRun, hl, invo, getFillsOnce, traderModeSync } = this.opts;
 		const coin = investment.ticker;
@@ -389,6 +394,10 @@ export class PositionSync {
 		// Within the fresh window but already up more than maxProfitPct,
 		// refuse for now, but only for now - re-evaluated next cycle.
 		if (!entry.ourBaseShortId) {
+			if (noNewPositions) {
+				log({ type: 'skip', reason: 'emergency: new positions disabled', baseId, coin, trader: investment.owner?.username });
+				return;
+			}
 			const verdict = evaluateStaleEntry(investment, staleEntry);
 			if (verdict.skip) {
 				if (verdict.permanent) {

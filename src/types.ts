@@ -136,6 +136,18 @@ export interface RiskConfig {
 }
 
 /**
+ * Global emergency guardrails, independent of the per-portfolio risk band -
+ * `noNewPositions` blocks a genuinely brand-new open while still letting
+ * already-tracked positions adjust/close per trader signal; `fullStop` halts
+ * the entire reconcile cycle (no opens, adjusts, or closes at all), leaving
+ * every real position exactly as-is for manual handling.
+ */
+export interface EmergencyConfig {
+	noNewPositions: boolean;
+	fullStop: boolean;
+}
+
+/**
  * "Trader mode": mirrors every trade Sentinel opens/adjusts/closes onto a
  * separate Invo portfolio (owned by the same Invo account already
  * authenticated via INVO_REFRESH_TOKEN) as a paper-traded trade idea, so
