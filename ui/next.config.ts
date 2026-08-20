@@ -22,9 +22,10 @@ const nextConfig: NextConfig = {
 	serverExternalPackages: ["better-sqlite3"],
 	// repo root has its own lockfile; without this Next misdetects the workspace root
 	outputFileTracingRoot: path.join(import.meta.dirname, ".."),
-	// sharp is next's optional dependency for next/image optimization, which this app never uses (no next/image anywhere) - excluding it drops ~20MB of unused native binaries from the standalone release bundle
+	// sharp is next's optional dependency for next/image optimization, which this app never uses (no next/image anywhere) - excluding it drops ~20MB of unused native binaries from the standalone release bundle.
+	// typescript is dev-only (next build's type-checking) - the standalone server.js embeds next.config.ts's parsed output as a JSON literal at build time and never re-parses it at runtime, so typescript is traced in but never actually required - excluding it drops another ~9MB.
 	outputFileTracingExcludes: {
-		"*": ["node_modules/sharp/**", "node_modules/@img/**"],
+		"*": ["node_modules/sharp/**", "node_modules/@img/**", "node_modules/typescript/**"],
 	},
 	// the dev-only build-activity icon has no place in this project's own screenshots/docs
 	devIndicators: false,
