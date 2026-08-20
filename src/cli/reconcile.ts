@@ -1,11 +1,12 @@
 import { readdirSync, readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
 import { loadConfig } from '../config/env.js';
 import { buildReconcileReport } from '../core/reconcile-report.js';
+import { ConfigStore } from '../services/config-store.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
+import { resolveRootDir } from '../services/root-dir.js';
 import { StateStore } from '../services/state-store.js';
 import type { ClosedInvestment, OpenInvestment } from '../types.js';
 
@@ -16,7 +17,7 @@ import type { ClosedInvestment, OpenInvestment } from '../types.js';
 // (exchange-side fill history, independent of anything this project itself
 // logged). Read-only; places no orders, changes no state.
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_DIR = resolveRootDir(import.meta.url);
 
 function parseArgs() {
 	const hoursArg = process.argv.find((a) => a.startsWith('--hours='));
@@ -58,13 +59,18 @@ function loadLogEvents(sinceMs: number): Record<string, unknown>[] {
 async function main() {
 	const { windowMs } = parseArgs();
 	const sinceMs = Date.now() - windowMs;
-	const config = loadConfig();
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const configStore = new ConfigStore(dbPath);
+	const config = await loadConfig(configStore);
+	if (!config.configured) {
+		console.error(JSON.stringify({ type: 'reconcile_fatal', message: `Not configured yet: missing ${config.missing.join(', ')}. Run the setup wizard in the dashboard, or set these in .env.` }));
+		process.exit(2);
+	}
 
 	const invo = new InvoClient(config.invoRefreshToken);
 	const hl = new HyperliquidClient(config.hlAgentKey, config.walletAddress);
 	await hl.connect();
 
-	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
 	const stateStore = new StateStore(dbPath, () => {});
 	const ignoredStore = new IgnoredTradesStore(dbPath, () => {});
 	const state = stateStore.load();

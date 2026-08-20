@@ -1,20 +1,22 @@
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
-import { loadConfig } from '../config/env.js';
+import { loadConfig, loadRiskConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
 import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
+import { ConfigStore } from '../services/config-store.js';
+import { shouldUseConsoleTui, startConsoleTui } from '../services/console-tui.js';
 import { CycleFillsCache } from '../services/cycle-fills-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
-import { createLogger } from '../services/logger.js';
+import { createLogger, type Logger } from '../services/logger.js';
 import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
+import { resolveRootDir } from '../services/root-dir.js';
 import { StateStore } from '../services/state-store.js';
 
 // No Claude/LLM in this loop. Mechanically mirrors every open/adjust/close
@@ -28,7 +30,7 @@ import { StateStore } from '../services/state-store.js';
 // See README.md for the full design rationale (why the feed isn't used,
 // what entrySize actually means, the same-coin-multiple-traders limit).
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_DIR = resolveRootDir(import.meta.url);
 
 function parseArgs() {
 	const dryRun = process.argv.includes('--dry-run');
@@ -43,14 +45,26 @@ function parseArgs() {
 
 async function main() {
 	const { dryRun, minMarginPct, maxMarginPct } = parseArgs();
-	const config = loadConfig({ minMarginPct, maxMarginPct });
+	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
+	const configStore = new ConfigStore(dbPath);
+	let config = await loadConfig(configStore, { minMarginPct, maxMarginPct });
 
-	const log = createLogger({
+	// The TUI, when active, owns the terminal (its own redraw loop shows a
+	// summarized feed) - raw JSON lines would just scroll underneath it, so
+	// the logger is told to skip its own stdout mirror in that case. File
+	// logging (still the full JSON detail, used by `npm run reconcile` etc.)
+	// is unaffected either way.
+	const useTui = shouldUseConsoleTui();
+	const rawLog = createLogger({
 		name: 'auto-copy',
 		dir: join(ROOT_DIR, 'logs'),
 		retentionHours: config.logRetentionHours,
 		maxTotalMb: config.logMaxTotalMb,
+		quiet: useTui,
 	});
+	const tui = useTui ? startConsoleTui(ROOT_DIR) : null;
+	const log: Logger = tui ? (obj) => { rawLog(obj); tui.onLog(obj); } : rawLog;
+	configStore.setLogger(log);
 
 	// Never let an unforeseen error kill the process silently. Log fully
 	// (stdout + logs/) and exit non-zero so a process supervisor (pm2,
@@ -72,12 +86,24 @@ async function main() {
 		process.exit(1);
 	});
 
+	// First run on a fresh install: no crash-on-missing-config, just idle
+	// until the setup wizard (or a hand-edited .env) supplies the 3 required
+	// secrets - polled on a short fixed interval, independent of
+	// pollIntervalMs, since that value itself might not be configured yet.
+	if (!config.configured) {
+		log({ type: 'awaiting_configuration', missing: config.missing });
+		while (!config.configured) {
+			await new Promise((r) => setTimeout(r, 5_000));
+			config = await loadConfig(configStore, { minMarginPct, maxMarginPct });
+		}
+		log({ type: 'configuration_complete' });
+	}
+
 	const invo = new InvoClient(config.invoRefreshToken);
 	const hl = new HyperliquidClient(config.hlAgentKey, config.walletAddress);
 	await hl.connect();
 
 	const meta = await hl.getMeta();
-	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
 	const stateStore = new StateStore(dbPath, log);
 	const ignoredStore = new IgnoredTradesStore(dbPath, log);
 	// Deliberately still JSON, not SQLite - the one user-hand-edited store
@@ -110,7 +136,7 @@ async function main() {
 		followedPortfoliosStore,
 		cloidAttributionStore,
 		cycleFillsCache,
-		config.risk,
+		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
 		log,
 	);
 

@@ -32,6 +32,8 @@ export class Reconciler {
 	private invalidOverridePortfolioIds = new Set<string>();
 	/** Last-logged override signature per portfolio ("min|max"), so a change re-logs but a steady override doesn't spam every cycle. */
 	private loggedOverrideSignature = new Map<string, string>();
+	/** The global band as of the previous cycle, so a change can be logged explicitly - a mid-run edit resizes every clamped position within seconds, real orders that would otherwise be indistinguishable in the logs from trader-driven adjustments (and unexplainable by reconcile.ts's Invo/HL audit). `null` until the first cycle completes, so boot itself is never logged as a "change". */
+	private lastGlobalRisk: RiskConfig | null = null;
 
 	constructor(
 		private poller: PortfolioPoller,
@@ -44,7 +46,8 @@ export class Reconciler {
 		private followedPortfoliosStore: FollowedPortfoliosStore,
 		private cloidAttributionStore: CloidAttributionStore,
 		private cycleFillsCache: CycleFillsCache,
-		private globalRisk: RiskConfig,
+		/** Called once at the top of every cycle, not just at construction - a settings-page edit to the global margin band takes effect on the next cycle, not just at daemon restart. */
+		private getGlobalRisk: () => RiskConfig,
 		private log: Logger,
 	) {}
 
@@ -56,6 +59,29 @@ export class Reconciler {
 		// means that's readable straight from the logs afterward instead.
 		const cycleStartedAt = Date.now();
 		this.log({ type: 'cycle_start' });
+
+		const globalRisk = this.getGlobalRisk();
+		if (
+			this.lastGlobalRisk &&
+			(this.lastGlobalRisk.minMarginPct !== globalRisk.minMarginPct ||
+				this.lastGlobalRisk.maxMarginPct !== globalRisk.maxMarginPct ||
+				this.lastGlobalRisk.maxLeverage !== globalRisk.maxLeverage)
+		) {
+			this.log({
+				type: 'risk_band_changed',
+				from: {
+					minMarginPct: this.lastGlobalRisk.minMarginPct * 100,
+					maxMarginPct: this.lastGlobalRisk.maxMarginPct * 100,
+					maxLeverage: this.lastGlobalRisk.maxLeverage ?? null,
+				},
+				to: {
+					minMarginPct: globalRisk.minMarginPct * 100,
+					maxMarginPct: globalRisk.maxMarginPct * 100,
+					maxLeverage: globalRisk.maxLeverage ?? null,
+				},
+			});
+		}
+		this.lastGlobalRisk = globalRisk;
 
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
@@ -190,13 +216,13 @@ export class Reconciler {
 				isAdHoc: isAdHoc || undefined,
 			});
 
-			let risk = this.globalRisk;
+			let risk = globalRisk;
 			if (!isAdHoc) {
 				// Ad-hoc (manually-mimicked) portfolios don't support a risk-band
 				// override in this version - PortfolioRiskStore only syncs
 				// entries for followed portfolios; always the global band.
 				const portfolioOverride = riskEntries.find((e) => e.portfolioId === portfolioId);
-				const resolved = resolvePortfolioRisk(this.globalRisk, portfolioOverride);
+				const resolved = resolvePortfolioRisk(globalRisk, portfolioOverride);
 				risk = resolved.risk;
 				if (resolved.invalidOverrideReason) {
 					if (!this.invalidOverridePortfolioIds.has(portfolioId)) {
@@ -243,7 +269,7 @@ export class Reconciler {
 		// reporting the daemon as down for what should have been a
 		// transient, gracefully-tolerated hiccup like any other).
 		try {
-			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds);
+			await this.discoverAndAdoptCloidAttributedPositions(cloidCache, state, ignored, investmentsByCoin, riskEntries, followedPortfolioIds, adHocPortfolioIds, globalRisk);
 		} catch (e: any) {
 			this.log({ type: 'error', source: 'cloid_attribution_discovery', message: e.message });
 		}
@@ -364,6 +390,7 @@ export class Reconciler {
 		riskEntries: PortfolioRiskEntry[],
 		followedPortfolioIds: Set<string>,
 		adHocPortfolioIds: Set<string>,
+		globalRisk: RiskConfig,
 	): Promise<void> {
 		const positions = await this.hl.getPositions();
 		const { resolved } = await discoverCloidAttributedCoins(this.hl, this.invo, positions, state, cloidCache, this.log);
@@ -393,7 +420,7 @@ export class Reconciler {
 			// still gets its own override checked.
 			const isFollowed = followedPortfolioIds.has(portfolioId);
 			const portfolioOverride = riskEntries.find((e) => e.portfolioId === portfolioId);
-			const risk = isFollowed ? resolvePortfolioRisk(this.globalRisk, portfolioOverride).risk : this.globalRisk;
+			const risk = isFollowed ? resolvePortfolioRisk(globalRisk, portfolioOverride).risk : globalRisk;
 
 			for (const { coin, attribution } of coins) {
 				const investment = investments.find((inv) => inv.baseId === attribution.investmentBaseId);
