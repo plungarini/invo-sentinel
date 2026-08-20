@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import type { ConfigStore } from '../services/config-store.js';
-import type { EmergencyConfig, RiskConfig, TraderModeConfig } from '../types.js';
+import type { EmergencyConfig, RiskConfig, TraderModeConfig, UpdateConfig } from '../types.js';
 import type { StaleEntryConfig } from '../services/stale-entry-policy.js';
 
 export interface AppConfig {
@@ -20,6 +20,7 @@ export interface AppConfig {
 	healthcheckPingUrl?: string;
 	traderMode: TraderModeConfig;
 	emergency: EmergencyConfig;
+	update: UpdateConfig;
 }
 
 export const DEFAULT_LOG_RETENTION_HOURS = 24;
@@ -104,6 +105,20 @@ export function loadEmergencyConfig(configStore: ConfigStore): EmergencyConfig {
 }
 
 /**
+ * Reads the auto-update toggle - split out for the same reason as
+ * `loadEmergencyConfig`: re-resolved fresh every check cycle, not just at
+ * boot, so flipping it off on the settings page stops the very next
+ * scheduled update check rather than requiring a restart. Defaults to on
+ * (absence = true) per the feature's own default.
+ */
+export function loadUpdateConfig(configStore: ConfigStore): UpdateConfig {
+	const stored = configStore.load();
+	return {
+		autoUpdate: readValue(stored, 'autoUpdate', 'AUTO_UPDATE') !== 'false',
+	};
+}
+
+/**
  * Loads and validates config from `ConfigStore` (sentinel.db), falling back
  * to `process.env`/`.env` for anything not yet set in the DB. Async so a
  * future `ConfigStore` backend needing real I/O doesn't force another
@@ -152,5 +167,6 @@ export async function loadConfig(
 		healthcheckPingUrl: readValue(stored, 'healthcheckPingUrl', 'HEALTHCHECK_PING_URL') || undefined,
 		traderMode: loadTraderModeConfig(configStore),
 		emergency: loadEmergencyConfig(configStore),
+		update: loadUpdateConfig(configStore),
 	};
 }

@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { InvoClient } from '../clients/invo-client.js';
-import { loadConfig, loadEmergencyConfig, loadRiskConfig, loadTraderModeConfig } from '../config/env.js';
+import { loadConfig, loadEmergencyConfig, loadRiskConfig, loadTraderModeConfig, loadUpdateConfig } from '../config/env.js';
 import { PortfolioPoller } from '../core/portfolio-poller.js';
 import { PositionSync } from '../core/position-sync.js';
 import { Reconciler } from '../core/reconciler.js';
@@ -17,8 +17,11 @@ import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger, type Logger } from '../services/logger.js';
 import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
-import { resolveRootDir } from '../services/root-dir.js';
+import { isCompiledBuild, resolveRootDir } from '../services/root-dir.js';
+import { isVersionRollbackBlocked, performUpdate } from '../services/self-updater.js';
 import { StateStore } from '../services/state-store.js';
+import { checkForUpdate } from '../services/update-checker.js';
+import { APP_VERSION } from '../version.js';
 
 // No Claude/LLM in this loop. Mechanically mirrors every open/adjust/close
 // on every portfolio you follow, on a plain polling cycle. The only
@@ -41,6 +44,51 @@ function parseArgs() {
 		dryRun,
 		minMarginPct: minPctStr !== undefined ? parseFloat(minPctStr) / 100 : undefined,
 		maxMarginPct: maxPctStr !== undefined ? parseFloat(maxPctStr) / 100 : undefined,
+	};
+}
+
+// Decoupled from pollIntervalMs on purpose - a trading-cycle-scale check
+// against GitHub would be wasteful and pointless (releases don't ship every
+// few seconds); this uses its own long interval instead, well inside
+// GitHub's 60/hr unauthenticated rate limit.
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+/**
+ * No-op entirely on a source/`tsx` checkout (`isCompiledBuild()` false) -
+ * that setup updates via `git pull`, not this. Runs at most once per
+ * `UPDATE_CHECK_INTERVAL_MS`, gated by its own `nextCheckAt` closure rather
+ * than the trading poll loop's cadence. On finding + successfully staging a
+ * newer release, exits the process (special code 42) so `start.bat`/
+ * `start.sh` - the same wrapper that already restarts on any crash - can
+ * detect the pending-update marker and perform the actual file swap with
+ * this process fully exited (no self-file-lock hazard on any OS).
+ */
+function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Logger) {
+	let nextCheckAt = isCompiledBuild() ? Date.now() : Infinity;
+	return async function maybeCheckForUpdate(): Promise<void> {
+		if (!isCompiledBuild()) return;
+		if (Date.now() < nextCheckAt) return;
+		nextCheckAt = Date.now() + UPDATE_CHECK_INTERVAL_MS;
+
+		if (!loadUpdateConfig(configStore).autoUpdate) return;
+
+		const result = await checkForUpdate(APP_VERSION, log);
+		// Persisted so the dashboard's Settings page can show current/latest
+		// version without the UI process making its own GitHub call - same
+		// reasoning as followed-portfolios-store.ts keeping the UI out of
+		// direct Invo calls: one caller, one rate-limit budget to manage.
+		configStore.setMany({ updateLastCheckedAt: new Date().toISOString(), updateLatestVersionSeen: result.latestVersion });
+		if (!result.updateAvailable || !result.asset) return;
+		if (isVersionRollbackBlocked(rootDir, result.latestVersion)) {
+			log({ type: 'update_skipped_known_bad', version: result.latestVersion });
+			return;
+		}
+
+		const staged = await performUpdate({ rootDir, asset: result.asset, latestVersion: result.latestVersion, log });
+		if (staged) {
+			log({ type: 'update_restarting', fromVersion: APP_VERSION, toVersion: result.latestVersion });
+			process.exit(42);
+		}
 	};
 }
 
@@ -150,6 +198,8 @@ async function main() {
 
 	log({
 		type: 'started',
+		version: APP_VERSION,
+		autoUpdate: config.update.autoUpdate,
 		minMarginPct: config.risk.minMarginPct * 100,
 		maxMarginPct: config.risk.maxMarginPct * 100,
 		maxLeverage: config.risk.maxLeverage ?? null,
@@ -167,6 +217,8 @@ async function main() {
 		emergencyFullStop: config.emergency.fullStop,
 	});
 
+	const maybeCheckForUpdate = createUpdateChecker(ROOT_DIR, configStore, log);
+
 	pingStart(config.healthcheckPingUrl, log);
 	const first = await reconciler.run();
 	// null only when the cycle was skipped for a transient, self-recovering
@@ -177,6 +229,7 @@ async function main() {
 	let adHocPortfolioCount = first.adHocPortfolioCount ?? 0;
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
+	await maybeCheckForUpdate();
 
 	// Full-stop means every cycle is a no-op fetch-nothing early return (see
 	// reconciler.ts) - cheap either way, but there's no reason to burn a full
@@ -207,6 +260,7 @@ async function main() {
 			if (result.followedPortfolioCount != null) followedPortfolioCount = result.followedPortfolioCount;
 			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
+			await maybeCheckForUpdate();
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });
 			pingFail(config.healthcheckPingUrl, log);

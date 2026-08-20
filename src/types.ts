@@ -148,6 +148,15 @@ export interface EmergencyConfig {
 }
 
 /**
+ * Auto-update toggle for a packaged release build (see update-checker.ts/
+ * self-updater.ts) - on by default. Has no effect at all on a source/`tsx`
+ * checkout, which updates via `git pull` instead.
+ */
+export interface UpdateConfig {
+	autoUpdate: boolean;
+}
+
+/**
  * "Trader mode": mirrors every trade Sentinel opens/adjusts/closes onto a
  * separate Invo portfolio (owned by the same Invo account already
  * authenticated via INVO_REFRESH_TOKEN) as a paper-traded trade idea, so
