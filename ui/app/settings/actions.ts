@@ -199,3 +199,17 @@ export async function saveEmergencySettings(_prev: ActionState, formData: FormDa
 		return { ok: false, error: e instanceof Error ? e.message : String(e) };
 	}
 }
+
+export async function saveUpdateSettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
+	try {
+		const autoUpdate = formData.get("autoUpdate") === "on";
+
+		getConfigStore().setMany({ autoUpdate: String(autoUpdate) });
+
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
