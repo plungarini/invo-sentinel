@@ -45,3 +45,8 @@ export function resolveRootDir(importMetaUrl: string): string {
 	}
 	return join(dirname(fileURLToPath(importMetaUrl)), '..', '..');
 }
+
+/** Same `argv[0] === 'bun'` signal as above - true only for a real `bun build --compile` executable, false under `tsx`/`bun run`/plain `node`. Auto-update only makes sense against a packaged release; a source checkout updates via `git pull`. */
+export function isCompiledBuild(): boolean {
+	return process.argv[0] === 'bun';
+}
