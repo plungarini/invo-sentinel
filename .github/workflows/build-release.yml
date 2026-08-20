@@ -104,8 +104,10 @@ jobs:
           cp -r ui/public ui/.next/standalone/ui/public
           mkdir -p ui/.next/standalone/ui/.next
           cp -r ui/.next/static ui/.next/standalone/ui/.next/static
-          cp -r ui/.next/standalone/node_modules dist/node_modules
-          cp -r ui/.next/standalone/ui dist/ui
+          test -f ui/.next/standalone/ui/.next/BUILD_ID || { echo "::error::standalone build is missing .next/BUILD_ID - next build did not produce a usable standalone bundle"; exit 1; }
+          mkdir -p dist/bin
+          cp -r ui/.next/standalone/node_modules dist/bin/node_modules
+          cp -r ui/.next/standalone/ui dist/bin/ui
 
       - name: Bundle platform quick-start doc + .env.example + README
         shell: bash

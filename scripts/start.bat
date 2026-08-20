@@ -1,20 +1,27 @@
 @echo off
-REM Starts everything - the daemon AND the dashboard UI (if this release
-REM includes one and Node.js is available) - from a single double-click.
-REM The actual daemon binary lives in bin\ (not next to this script)
-REM specifically so there's only one obvious thing to double-click at the
-REM top level - see GETTING-STARTED.txt. The daemon itself logs fatal errors
-REM and exits non-zero rather than dying silently; that's what actually
-REM brings it back up here. State (bin\data\sentinel.db) and bin\logs\ both
-REM live inside bin\, alongside the binary that owns them, and persist
+REM Starts the daemon - from a single double-click. Everything internal -
+REM the daemon binary, the dashboard UI's own files, its node_modules, and
+REM all runtime state (data\, logs\) - lives inside bin\, so this top-level
+REM folder only ever holds this script plus the docs a user actually reads
+REM - see GETTING-STARTED.txt. The daemon itself logs fatal errors and
+REM exits non-zero rather than dying silently; that's what actually brings
+REM it back up here. State (bin\data\sentinel.db) and bin\logs\ persist
 REM across restarts.
+REM
+REM The dashboard UI is started and supervised by the daemon itself
+REM (src/services/ui-supervisor.ts, via Node's own child_process - hidden
+REM on Windows via `windowsHide`, no separate console window and no
+REM OS-specific script needed here), not by this wrapper - this script only
+REM ever runs the one daemon process.
 REM
 REM Also owns the auto-update swap (src/services/self-updater.ts stages a
 REM new release under bin\.update\ and exits; this loop does the actual file
-REM swap with the daemon fully exited, then relaunches) and a crash-loop
-REM rollback: if the daemon crashes quickly right after a swap, twice in a
-REM row, the previous version is restored and that release is blacklisted
-REM (bin\.update\rollback-blocked-<version>.json) so it's never auto-retried.
+REM swap with the daemon fully exited - which by then has already stopped
+REM its own UI child, see ui-supervisor.ts - then relaunches) and a
+REM crash-loop rollback: if the daemon crashes quickly right after a swap,
+REM twice in a row, the previous version is restored and that release is
+REM blacklisted (bin\.update\rollback-blocked-<version>.json) so it's never
+REM auto-retried.
 REM
 REM Usage: start.bat [minMarginPct] [maxMarginPct] [--dry-run]
 REM        start.bat --background   - launch detached, free this window immediately
@@ -28,8 +35,6 @@ if "%~1"=="--background" (
 
 if not exist bin\logs mkdir bin\logs
 if not exist bin\.update mkdir bin\.update
-
-call :start_ui
 
 set RESTART_DELAY=5
 set HEALTHY_RUN_SECONDS=20
@@ -63,28 +68,6 @@ echo [start] restarting in %RESTART_DELAY%s
 timeout /t %RESTART_DELAY% /nobreak >nul
 goto loop
 
-:start_ui
-REM The dashboard UI is a separate Node.js process (ui\server.js, present
-REM only if this release includes it) - started alongside the daemon, not
-REM instead of it. Node itself isn't bundled (unlike the daemon, which is a
-REM self-contained .exe), so this is skipped with a clear message if it's
-REM missing rather than failing silently.
-if exist ui\server.js (
-	where node >nul 2>nul
-	if errorlevel 1 (
-		echo [start] Node.js not found - the dashboard UI needs it, the daemon does not.
-		echo [start] Install Node from https://nodejs.org, then re-run start.bat for the UI too.
-	) else (
-		start "Invo Sentinel UI" /MIN cmd /c "cd /d "%~dp0ui" && set PORT=4400 && node server.js >> "%~dp0bin\logs\ui.log" 2>&1"
-		start "" cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:4400"
-	)
-)
-exit /b 0
-
-:stop_ui
-taskkill /FI "WINDOWTITLE eq Invo Sentinel UI*" /T /F >nul 2>nul
-exit /b 0
-
 :record_update_crash
 set CRASH_COUNT=0
 if exist bin\.update\crash-count (
@@ -105,19 +88,17 @@ echo [start] rolling back to previous version - new build crash-looped
 set BAD_VERSION=
 if exist bin\.update\pending-version-applied set /p BAD_VERSION=<bin\.update\pending-version-applied
 
-call :stop_ui
-
 if exist bin\invo-sentinel.exe.prev (
 	del /q bin\invo-sentinel.exe 2>nul
 	move /y bin\invo-sentinel.exe.prev bin\invo-sentinel.exe >nul
 )
-if exist ui.prev (
-	rd /s /q ui 2>nul
-	move /y ui.prev ui >nul
+if exist bin\ui.prev (
+	rd /s /q bin\ui 2>nul
+	move /y bin\ui.prev bin\ui >nul
 )
-if exist node_modules.prev (
-	rd /s /q node_modules 2>nul
-	move /y node_modules.prev node_modules >nul
+if exist bin\node_modules.prev (
+	rd /s /q bin\node_modules 2>nul
+	move /y bin\node_modules.prev bin\node_modules >nul
 )
 
 if defined BAD_VERSION type nul > "bin\.update\rollback-blocked-!BAD_VERSION!.json"
@@ -125,13 +106,12 @@ if defined BAD_VERSION type nul > "bin\.update\rollback-blocked-!BAD_VERSION!.js
 del /q bin\.update\just-updated 2>nul
 del /q bin\.update\crash-count 2>nul
 del /q bin\.update\pending-version-applied 2>nul
-
-call :start_ui
 exit /b 0
 
 REM The actual file swap for a staged update (src/services/self-updater.ts
 REM downloads+verifies+extracts to bin\.update\staging\ and exits; this runs
-REM with the daemon fully exited, so there's no self-file-lock hazard).
+REM with the daemon fully exited - which by then has already stopped its
+REM own UI child process - so there's no self-file-lock hazard).
 REM Previous exe/ui/node_modules are kept as .prev for one run in case the
 REM new version crash-loops (see :rollback_update above).
 :apply_pending_update
@@ -146,19 +126,17 @@ set NEW_VERSION=unknown
 if exist bin\.update\pending-version.txt set /p NEW_VERSION=<bin\.update\pending-version.txt
 echo [start] applying staged update to !NEW_VERSION!...
 
-call :stop_ui
-
 if exist bin\invo-sentinel.exe.prev del /q bin\invo-sentinel.exe.prev
 move /y bin\invo-sentinel.exe bin\invo-sentinel.exe.prev >nul
 move /y bin\.update\staging\bin\invo-sentinel.exe bin\invo-sentinel.exe >nul
 
-if exist ui.prev rd /s /q ui.prev
-if exist ui move /y ui ui.prev >nul
-if exist bin\.update\staging\ui move /y bin\.update\staging\ui ui >nul
+if exist bin\ui.prev rd /s /q bin\ui.prev
+if exist bin\ui move /y bin\ui bin\ui.prev >nul
+if exist bin\.update\staging\bin\ui move /y bin\.update\staging\bin\ui bin\ui >nul
 
-if exist node_modules.prev rd /s /q node_modules.prev
-if exist node_modules move /y node_modules node_modules.prev >nul
-if exist bin\.update\staging\node_modules move /y bin\.update\staging\node_modules node_modules >nul
+if exist bin\node_modules.prev rd /s /q bin\node_modules.prev
+if exist bin\node_modules move /y bin\node_modules bin\node_modules.prev >nul
+if exist bin\.update\staging\bin\node_modules move /y bin\.update\staging\bin\node_modules bin\node_modules >nul
 
 echo !NEW_VERSION! > bin\.update\pending-version-applied
 type nul > bin\.update\just-updated
@@ -166,6 +144,5 @@ del /q bin\.update\pending.json 2>nul
 del /q bin\.update\pending-version.txt 2>nul
 rd /s /q bin\.update\staging 2>nul
 
-call :start_ui
 echo [start] update to !NEW_VERSION! applied
 exit /b 0
