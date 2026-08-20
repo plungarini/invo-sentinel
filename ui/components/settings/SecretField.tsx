@@ -61,6 +61,7 @@ export default function SecretField({
 				value={displayValue}
 				placeholder={placeholder}
 				required={required && !currentValue}
+				autoComplete="off"
 				onFocus={() => {
 					setFocused(true);
 					if (showingCurrent && clearOnFocus) setCleared(true);
@@ -75,7 +76,7 @@ export default function SecretField({
 				}}
 				className={className}
 			/>
-			<input type="hidden" name={name} value={typed} />
+			<input type="hidden" name={name} value={typed} autoComplete="off" />
 			{hint && <span className="text-[12px] text-text-faint">{hint}</span>}
 		</label>
 	);
