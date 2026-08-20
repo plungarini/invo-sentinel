@@ -17,6 +17,8 @@ export interface TuningFormValues {
 	maxLeverage: string;
 	staleEntryMaxAgeMinutes: string;
 	staleEntryMaxProfitPct: string;
+	staleEntryMaxAgeEnabled: boolean;
+	staleEntryMaxProfitEnabled: boolean;
 	pollIntervalMs: string;
 	logRetentionHours: string;
 	logMaxTotalMb: string;
@@ -95,6 +97,8 @@ export async function getSettingsFormValues(): Promise<{
 			maxLeverage: config.risk.maxLeverage != null ? String(config.risk.maxLeverage) : "",
 			staleEntryMaxAgeMinutes: String(config.staleEntry.maxAgeMinutes),
 			staleEntryMaxProfitPct: String(config.staleEntry.maxProfitPct),
+			staleEntryMaxAgeEnabled: config.staleEntry.maxAgeEnabled,
+			staleEntryMaxProfitEnabled: config.staleEntry.maxProfitEnabled,
 			pollIntervalMs: String(config.pollIntervalMs),
 			logRetentionHours: String(config.logRetentionHours),
 			logMaxTotalMb: String(config.logMaxTotalMb),
