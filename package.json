@@ -1,6 +1,6 @@
 {
 	"name": "invo-sentinel",
-	"version": "1.12.0",
+	"version": "1.13.0",
 	"description": "Automatic copy trader for Invo followed portfolios, executing on Hyperliquid.",
 	"type": "module",
 	"license": "MIT",

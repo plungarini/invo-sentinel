@@ -46,11 +46,12 @@ export function compareVersions(a: string, b: string): number {
 	return 0;
 }
 
-/** The exact asset-name convention build-release.yml produces, keyed by the runtime's own platform+arch - only the 3 combinations that workflow's matrix actually builds; anything else (e.g. linux-arm64) has no asset to find. */
+/** The exact asset-name convention build-release.yml produces, keyed by the runtime's own platform+arch - only the 4 combinations that workflow's matrix actually builds; anything else has no asset to find. */
 export function platformAssetBaseName(platform = process.platform, arch = process.arch): string | null {
 	if (platform === 'win32' && arch === 'x64') return 'invo-sentinel-windows-x64';
 	if (platform === 'linux' && arch === 'x64') return 'invo-sentinel-linux-x64';
 	if (platform === 'darwin' && arch === 'arm64') return 'invo-sentinel-macos-arm64';
+	if (platform === 'linux' && arch === 'arm64') return 'invo-sentinel-linux-arm64';
 	return null;
 }
 

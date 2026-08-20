@@ -65,6 +65,13 @@ jobs:
             wrapper_src: scripts/start.sh
             wrapper_dest: start.sh
             docs_src: scripts/release-docs/GETTING-STARTED-macos.txt
+          - os: ubuntu-24.04-arm
+            bun_target: bun-linux-arm64
+            artifact_name: invo-sentinel-linux-arm64
+            executable: invo-sentinel
+            wrapper_src: scripts/start.sh
+            wrapper_dest: start.sh
+            docs_src: scripts/release-docs/GETTING-STARTED-linux.txt
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
