@@ -3,9 +3,10 @@
 import { saveTuningSettings, type ActionState } from '@/app/settings/actions';
 import Button from '@/components/shared/Button';
 import type { TuningFormValues } from '@/server/daemon/settings';
-import { useActionState, useState } from 'react';
+import { useActionState, useRef, useState } from 'react';
 import Field from './Field';
 import ToggleRow from './ToggleRow';
+import { useAutoSaveForm } from './useAutoSaveForm';
 
 const INITIAL_STATE: ActionState = { ok: false };
 
@@ -17,9 +18,11 @@ export default function TuningSettingsForm({ defaultValues }: { defaultValues: T
 	const [state, formAction, pending] = useActionState(saveTuningSettings, INITIAL_STATE);
 	const [maxAgeEnabled, setMaxAgeEnabled] = useState(defaultValues.staleEntryMaxAgeEnabled);
 	const [maxProfitEnabled, setMaxProfitEnabled] = useState(defaultValues.staleEntryMaxProfitEnabled);
+	const formRef = useRef<HTMLFormElement>(null);
+	const autoSave = useAutoSaveForm(formRef, { pending });
 
 	return (
-		<form action={formAction} className="flex flex-col gap-6">
+		<form ref={formRef} action={formAction} className="flex flex-col gap-6" onChange={autoSave.onChange} onBlur={autoSave.onBlur}>
 			<div className="flex flex-col gap-3">
 				<SectionLabel>Risk band</SectionLabel>
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

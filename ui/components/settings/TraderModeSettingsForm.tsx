@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import Button from "@/components/shared/Button";
 import { saveTraderModeSettings, type ActionState } from "@/app/settings/actions";
 import type { TraderModeFormValues } from "@/server/daemon/settings";
 import Field from "./Field";
 import ToggleRow from "./ToggleRow";
+import { useAutoSaveForm } from "./useAutoSaveForm";
 
 const INITIAL_STATE: ActionState = { ok: false };
 
@@ -13,9 +14,11 @@ export default function TraderModeSettingsForm({ defaultValues }: { defaultValue
 	const [state, formAction, pending] = useActionState(saveTraderModeSettings, INITIAL_STATE);
 	const [enabled, setEnabled] = useState(defaultValues.enabled);
 	const [autoShare, setAutoShare] = useState(defaultValues.autoShare);
+	const formRef = useRef<HTMLFormElement>(null);
+	const autoSave = useAutoSaveForm(formRef, { pending });
 
 	return (
-		<form action={formAction} className="flex flex-col gap-6">
+		<form ref={formRef} action={formAction} className="flex flex-col gap-6" onChange={autoSave.onChange} onBlur={autoSave.onBlur}>
 			<ToggleRow
 				label="Trader mode"
 				hint="Mirrors every trade Sentinel opens/adjusts/closes onto an Invo portfolio you own, as a paper-traded trade idea."

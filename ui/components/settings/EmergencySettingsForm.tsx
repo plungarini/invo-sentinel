@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import Button from "@/components/shared/Button";
 import { saveEmergencySettings, type ActionState } from "@/app/settings/actions";
 import type { EmergencyFormValues } from "@/server/daemon/settings";
 import ToggleRow from "./ToggleRow";
+import { useAutoSaveForm } from "./useAutoSaveForm";
 
 const INITIAL_STATE: ActionState = { ok: false };
 
@@ -12,9 +13,11 @@ export default function EmergencySettingsForm({ defaultValues }: { defaultValues
 	const [state, formAction, pending] = useActionState(saveEmergencySettings, INITIAL_STATE);
 	const [noNewPositions, setNoNewPositions] = useState(defaultValues.noNewPositions);
 	const [fullStop, setFullStop] = useState(defaultValues.fullStop);
+	const formRef = useRef<HTMLFormElement>(null);
+	const autoSave = useAutoSaveForm(formRef, { pending });
 
 	return (
-		<form action={formAction} className="flex flex-col gap-5">
+		<form ref={formRef} action={formAction} className="flex flex-col gap-5" onChange={autoSave.onChange} onBlur={autoSave.onBlur}>
 			<ToggleRow
 				label="Don't open new positions"
 				hint="Already-tracked positions still adjust and close per trader signal; only a brand-new open is blocked."
