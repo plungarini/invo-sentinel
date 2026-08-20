@@ -128,6 +128,34 @@ export function RestartIcon({ className = 'h-5 w-5', strokeWidth = 1.5 }: IconPr
 	);
 }
 
+export function ClockDotsIcon({ className = 'h-5 w-5', strokeWidth = 1.5 }: IconProps) {
+	return (
+		<svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+			<path
+				d="M13.1953 16.7947L12.0387 11.9054L7.67529 11.9054"
+				stroke="currentColor"
+				strokeWidth={strokeWidth}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+			<path
+				d="M3 12C3 7.02908 7.02908 3 12 3C16.9709 3 21 7.02908 21 12C21 16.0007 18.3892 19.3924 14.7779 20.5631"
+				stroke="currentColor"
+				strokeWidth={strokeWidth}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+			<path
+				d="M10.8499 21L10.8417 20.9928M6.52112 19.2459L6.51288 19.2377M3.66472 15.5624L3.65649 15.5552"
+				stroke="currentColor"
+				strokeWidth={strokeWidth}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+		</svg>
+	);
+}
+
 export function HeartRateIcon({ className = 'h-5 w-5', strokeWidth = 1.5 }: IconProps) {
 	return (
 		<svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">

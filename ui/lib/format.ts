@@ -19,6 +19,14 @@ export function formatDuration(ms: number): string {
 	return `${minutes}m`;
 }
 
+/** Sub-minute granularity, unlike `formatDuration` above (minute-granular, meant for token/key expiry) - a poll cycle is typically single-digit seconds, where "<1m" would hide all the signal. */
+export function formatShortDuration(ms: number): string {
+	if (!Number.isFinite(ms) || ms < 0) return "N/A";
+	if (ms < 1000) return `${Math.round(ms)}ms`;
+	const seconds = ms / 1000;
+	return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
 export function timeAgo(isoOrMs: string | number): string {
 	const ms = typeof isoOrMs === "number" ? isoOrMs : Date.parse(isoOrMs);
 	if (!Number.isFinite(ms)) return "unknown";

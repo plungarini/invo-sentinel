@@ -21,6 +21,28 @@ export interface CycleStatus {
 	lastCompleteDurationMs: number | null;
 }
 
+const MAX_POLL_DURATION_SAMPLES = 200;
+
+/**
+ * Rolling average over the most recent (up to 200) real reconcile cycles -
+ * reads straight from the daemon's own `cycle_complete` log lines rather
+ * than a separate store, since those already carry `durationMs` for every
+ * cycle and persist across restarts the same way. Skipped cycles (a
+ * transient rate-limit no-op, see reconciler.ts) are excluded - they measure
+ * an early-return, not real poll work, and would drag the average down
+ * without reflecting an actually faster daemon.
+ */
+export function readAvgPollDuration(): { avgMs: number | null; sampleCount: number } {
+	const durations = readLogEvents(0)
+		.filter((e) => e.type === "cycle_complete" && !e.skipped && typeof e.durationMs === "number" && typeof e.ts === "string")
+		.sort((a, b) => Date.parse(b.ts as string) - Date.parse(a.ts as string))
+		.slice(0, MAX_POLL_DURATION_SAMPLES)
+		.map((e) => e.durationMs as number);
+
+	if (durations.length === 0) return { avgMs: null, sampleCount: 0 };
+	return { avgMs: durations.reduce((sum, d) => sum + d, 0) / durations.length, sampleCount: durations.length };
+}
+
 export interface RecentActivityEntry {
 	ts: string;
 	type: string;
