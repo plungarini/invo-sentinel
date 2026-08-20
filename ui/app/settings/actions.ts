@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getAppConfig, getConfigStore, invalidateConfigCache } from "@/server/daemon/paths";
 import { invalidateInvoClient } from "@/server/invo/client";
 import { invalidateHyperliquidClient } from "@/server/hyperliquid/client";
-import { verifyCredentials } from "@/server/daemon/verifyCredentials";
+import { verifyCredentials, verifyTraderModePortfolio } from "@/server/daemon/verifyCredentials";
 
 export interface ActionState {
 	ok: boolean;
@@ -134,6 +134,40 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 			// of actually clearing the field.
 			maxLeverage: maxLeverageRaw,
 			healthcheckPingUrl,
+		});
+
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/**
+ * A portfolio ID is only actually validated (see `verifyTraderModePortfolio`)
+ * when Trader mode is being turned ON with one set - saving with the toggle
+ * off, or clearing the portfolio ID, never needs a live Invo call.
+ */
+export async function saveTraderModeSettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
+	try {
+		const enabled = formData.get("enabled") === "on";
+		const portfolioId = String(formData.get("portfolioId") ?? "").trim();
+		const autoShare = formData.get("autoShare") === "on";
+		const caption = String(formData.get("caption") ?? "").trim();
+
+		if (enabled) {
+			if (!portfolioId) return { ok: false, error: "Portfolio ID is required to enable Trader mode." };
+			const current = await getAppConfig();
+			const verification = await verifyTraderModePortfolio(current.invoRefreshToken, portfolioId);
+			if (!verification.ok) return { ok: false, error: verification.error };
+		}
+
+		getConfigStore().setMany({
+			traderModeEnabled: String(enabled),
+			traderModePortfolioId: portfolioId,
+			traderModeAutoShare: String(autoShare),
+			traderModeCaption: caption,
 		});
 
 		invalidateConfigCache();

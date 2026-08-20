@@ -23,6 +23,13 @@ export interface TuningFormValues {
 	healthcheckPingUrl: string;
 }
 
+export interface TraderModeFormValues {
+	enabled: boolean;
+	portfolioId: string;
+	autoShare: boolean;
+	caption: string;
+}
+
 /** Gate for the first-run setup wizard - DB rows only, never `.env`, so an existing Pi/Docker `.env`-only deployment never sees an unnecessary wizard. */
 export async function shouldShowSetupWizard(): Promise<boolean> {
 	return !getConfigStore().hasRequiredSecretsInDb();
@@ -72,6 +79,7 @@ export async function getWizardPrefill(): Promise<WizardPrefill> {
 export async function getSettingsFormValues(): Promise<{
 	secrets: RequiredSecretsFormValues;
 	tuning: TuningFormValues;
+	traderMode: TraderModeFormValues;
 }> {
 	const config = await loadConfig(getConfigStore());
 	return {
@@ -91,6 +99,12 @@ export async function getSettingsFormValues(): Promise<{
 			logRetentionHours: String(config.logRetentionHours),
 			logMaxTotalMb: String(config.logMaxTotalMb),
 			healthcheckPingUrl: config.healthcheckPingUrl ?? "",
+		},
+		traderMode: {
+			enabled: config.traderMode.enabled,
+			portfolioId: config.traderMode.portfolioId ?? "",
+			autoShare: config.traderMode.autoShare,
+			caption: config.traderMode.caption ?? "",
 		},
 	};
 }
