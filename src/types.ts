@@ -66,6 +66,8 @@ export interface PositionState {
 	/** Our own client-generated baseShortId, used to link closes back to Invo. */
 	ourBaseShortId: string;
 	portfolioId?: string;
+	/** Snapshotted whenever known (while the portfolio is still followed) so it survives an unfollow, the same way ClosedTradeRecord.portfolioTitle does for closed trades - an open trade has no other durable source of this once its portfolio drops out of the followed list. */
+	portfolioTitle?: string;
 	ownerUsername?: string;
 	/**
 	 * OUR OWN fill price (from HL's order response, or the live mid at

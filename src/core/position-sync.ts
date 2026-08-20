@@ -5,7 +5,7 @@ import type { ClosedTradesStore } from '../services/closed-trades-store.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
-import type { HyperliquidFill, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
+import type { HyperliquidFill, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig } from '../types.js';
 import { resolveConflictByCloid } from './cloid-attribution.js';
 
 const MIN_ORDER_USD = 1; // delta below this is dust / rounding noise; no-op, not an order
@@ -155,8 +155,12 @@ export class PositionSync {
 			marginUsd: 0,
 			ourBaseShortId: '',
 			portfolioId: investment.portfolio?.id,
+			portfolioTitle: investment.portfolio?.title,
 			ownerUsername: investment.owner?.username,
 		};
+		// Refreshed every cycle while still followed, so the last-known value is
+		// what's left behind once the portfolio is unfollowed and this stops updating.
+		if (investment.portfolio?.title) entry.portfolioTitle = investment.portfolio.title;
 
 		// The user is always free to open/edit/close positions manually on
 		// Hyperliquid directly - this daemon must never crash or fight that.
@@ -518,6 +522,7 @@ export class PositionSync {
 				lastAppliedFraction: clampedFraction,
 				ourBaseShortId: entry.ourBaseShortId || 'DRYRUN',
 				portfolioId: investment.portfolio?.id,
+				portfolioTitle: entry.portfolioTitle,
 				ownerUsername: investment.owner?.username,
 				entryPrice: entry.entryPrice ?? (wasNewPosition ? price : undefined),
 				openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
@@ -612,6 +617,7 @@ export class PositionSync {
 			lastAppliedFraction: clampedFraction,
 			ourBaseShortId,
 			portfolioId: investment.portfolio?.id,
+			portfolioTitle: entry.portfolioTitle,
 			ownerUsername: investment.owner?.username,
 			entryPrice: entry.entryPrice ?? (wasNewPosition ? extractAvgFillPrice(orderResult) ?? price : undefined),
 			openedAt: entry.openedAt ?? (wasNewPosition ? new Date().toISOString() : undefined),
@@ -634,6 +640,46 @@ export class PositionSync {
 			hlResult: orderResult,
 			invoResult,
 		});
+	}
+
+	/**
+	 * For a baseId whose portfolio is no longer followed - detached from
+	 * trader-signal-driven management, but per the unfollow contract its real
+	 * position must never be closed BY this daemon. This only reconciles the
+	 * other direction: if the real position has already gone to zero on its
+	 * own (closed manually, stopped out, liquidated) since the last check,
+	 * record that as a real close and stop tracking; otherwise it's a no-op -
+	 * the entry stays tracked exactly as-is, no order is ever placed here.
+	 */
+	finalizeIfDetachedPositionClosed(baseId: string, state: PositionStateMap, livePositions: HyperliquidPosition[]): void {
+		const entry = state[baseId];
+		if (!entry) return;
+		const stillOpen = livePositions.some((p) => p.coin === entry.coin && parseFloat(p.szi) !== 0);
+		if (stillOpen) return;
+
+		this.opts.closedTrades.record({
+			baseId,
+			coin: entry.coin,
+			isBuy: entry.isBuy,
+			leverage: entry.leverage,
+			marginUsd: entry.marginUsd,
+			portfolioId: entry.portfolioId,
+			portfolioTitle: entry.portfolioTitle,
+			ownerUsername: entry.ownerUsername,
+			entryPrice: entry.entryPrice,
+			openedAt: entry.openedAt,
+			closedAt: new Date().toISOString(),
+			closeReason: 'detached_position_closed_externally',
+		});
+		this.opts.log({
+			type: 'detached_position_closed_externally',
+			baseId,
+			coin: entry.coin,
+			trader: entry.ownerUsername,
+			portfolioId: entry.portfolioId,
+			detail: 'real HL position for this detached (unfollowed-portfolio) trade is gone; recording close and stopping tracking',
+		});
+		delete state[baseId];
 	}
 
 	/** Fully mirrors a close; always, never clamped. `portfolioTitle` is a point-in-time snapshot for the durable closed-trade record - state itself never stores it, only `portfolioId`. */

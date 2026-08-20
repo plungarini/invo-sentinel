@@ -9,7 +9,7 @@ import type { Logger } from '../services/logger.js';
 import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { resolvePortfolioRisk } from '../services/risk-policy.js';
 import type { StateStore } from '../services/state-store.js';
-import type { CloidAttributionCache, FollowedPortfolio, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig } from '../types.js';
+import type { CloidAttributionCache, FollowedPortfolio, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig } from '../types.js';
 import { discoverCloidAttributedCoins, type ResolvedAttribution } from './cloid-attribution.js';
 import type { PortfolioPoller } from './portfolio-poller.js';
 import type { PositionSync } from './position-sync.js';
@@ -34,6 +34,8 @@ export class Reconciler {
 	private loggedOverrideSignature = new Map<string, string>();
 	/** The global band as of the previous cycle, so a change can be logged explicitly - a mid-run edit resizes every clamped position within seconds, real orders that would otherwise be indistinguishable in the logs from trader-driven adjustments (and unexplainable by reconcile.ts's Invo/HL audit). `null` until the first cycle completes, so boot itself is never logged as a "change". */
 	private lastGlobalRisk: RiskConfig | null = null;
+	/** baseIds already logged as detached-from-an-unfollowed-portfolio, so the transition is logged once, not every cycle for as long as the real position stays open. */
+	private loggedDetachedBaseIds = new Set<string>();
 
 	constructor(
 		private poller: PortfolioPoller,
@@ -275,28 +277,55 @@ export class Reconciler {
 		}
 		this.cloidAttributionStore.save(cloidCache);
 
-		// A whole portfolio going unfollowed (not just one investment
-		// closing) stops tracking WITHOUT closing - real position left
-		// as-is for manual handling; see `logUntrackedPositions`. Skip
+		// A whole portfolio going unfollowed (not just one investment closing)
+		// stops mirroring the TRADER's signal for anything tracked from it -
+		// nothing here ever places a close order - but the trade itself keeps
+		// being tracked independently, on its own, exactly like any other
+		// tracked position: still cross-checked for a manual/external close,
+		// still fully visible to analytics via its own PositionState (which
+		// keeps portfolioId/portfolioTitle regardless of follow state). Skip
 		// entries with no portfolioId (manually `npm run adopt`ed) and
 		// ad-hoc-tracked portfolios, which were never followed to begin with.
 		const knownPortfolioIds = new Set([...followedPortfolioIds, ...adHocPortfolioIds]);
-		let untrackedUnfollowed = false;
-		for (const [baseId, entry] of Object.entries(state)) {
-			if (!entry.portfolioId || knownPortfolioIds.has(entry.portfolioId)) continue;
-			this.log({
-				type: 'untracking_unfollowed_portfolio_position',
-				baseId,
-				coin: entry.coin,
-				trader: entry.ownerUsername,
-				portfolioId: entry.portfolioId,
-				reason:
-					'portfolio no longer followed; stopping tracking WITHOUT closing - real position left exactly as-is on the wallet for manual handling',
-			});
-			delete state[baseId];
-			untrackedUnfollowed = true;
+		const detachedEntries = Object.entries(state).filter(([, entry]) => entry.portfolioId && !knownPortfolioIds.has(entry.portfolioId));
+		if (detachedEntries.length > 0) {
+			for (const [baseId, entry] of detachedEntries) {
+				if (this.loggedDetachedBaseIds.has(baseId)) continue;
+				this.loggedDetachedBaseIds.add(baseId);
+				this.log({
+					type: 'portfolio_unfollowed_position_detached',
+					baseId,
+					coin: entry.coin,
+					trader: entry.ownerUsername,
+					portfolioId: entry.portfolioId,
+					reason:
+						'portfolio no longer followed; no longer mirroring this trader\'s signal, but continuing to track this open position independently until it closes (manually, or on its own) - never auto-closed by this daemon',
+				});
+			}
+
+			// Only reconciled the other direction here (already closed for real
+			// -> stop tracking); never the reverse. A failed fetch leaves every
+			// detached entry exactly as tracked, retried next cycle, rather than
+			// risking treating "we couldn't check" as "it's gone".
+			let livePositions: HyperliquidPosition[] | null = null;
+			try {
+				livePositions = await this.hl.getPositions();
+			} catch (e: any) {
+				this.log({ type: 'error', source: 'detached_position_check', message: e.message });
+			}
+			if (livePositions) {
+				let stateChanged = false;
+				for (const [baseId] of detachedEntries) {
+					const wasTracked = !!state[baseId];
+					this.sync.finalizeIfDetachedPositionClosed(baseId, state, livePositions);
+					if (wasTracked && !state[baseId]) {
+						this.loggedDetachedBaseIds.delete(baseId);
+						stateChanged = true;
+					}
+				}
+				if (stateChanged) this.stateStore.save(state);
+			}
 		}
-		if (untrackedUnfollowed) this.stateStore.save(state);
 		let unfollowedIgnoredChanged = false;
 		for (const [baseId, entry] of Object.entries(ignored)) {
 			if (!entry.portfolioId || knownPortfolioIds.has(entry.portfolioId)) continue;

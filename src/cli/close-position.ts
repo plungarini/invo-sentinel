@@ -71,6 +71,7 @@ async function main() {
 			leverage: entry.leverage,
 			marginUsd: entry.marginUsd,
 			portfolioId: entry.portfolioId,
+			portfolioTitle: entry.portfolioTitle,
 			ownerUsername: entry.ownerUsername,
 			entryPrice: entry.entryPrice,
 			closingPrice: closingPrice ?? undefined,
