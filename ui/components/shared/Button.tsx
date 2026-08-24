@@ -2,6 +2,7 @@ const VARIANTS = {
 	primary: "bg-gradient-to-b from-cta-from to-cta-to text-white hover:brightness-110",
 	secondary: "bg-surface text-text hover:bg-surface-hover",
 	ghost: "text-text-muted hover:bg-surface hover:text-text",
+	warning: "bg-badge-amber text-black hover:brightness-110",
 } as const;
 
 export default function Button({
