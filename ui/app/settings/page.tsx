@@ -1,6 +1,7 @@
 import CredentialInstructions from '@/components/settings/CredentialInstructions';
 import EmergencySettingsForm from '@/components/settings/EmergencySettingsForm';
 import RequiredSecretsForm from '@/components/settings/RequiredSecretsForm';
+import RestartRequiredSettingsForm from '@/components/settings/RestartRequiredSettingsForm';
 import TraderModeSettingsForm from '@/components/settings/TraderModeSettingsForm';
 import TuningSettingsForm from '@/components/settings/TuningSettingsForm';
 import UpdateCheckCard from '@/components/settings/UpdateCheckCard';
@@ -42,6 +43,12 @@ export default async function SettingsPage() {
 						checkboxes too, subject to the same React 19 form auto-reset
 						desync. */}
 						<TuningSettingsForm key={JSON.stringify(tuning)} defaultValues={tuning} />
+					</Card>
+
+					<Card title="Advanced (requires restart)" className="border border-badge-amber/30">
+						{/* Keyed on content, same reason as the forms above - the stale-entry
+						toggles here are controlled checkboxes too. */}
+						<RestartRequiredSettingsForm key={JSON.stringify(tuning)} defaultValues={tuning} />
 					</Card>
 
 					<Card title="Trader mode">

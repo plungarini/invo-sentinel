@@ -118,6 +118,28 @@ function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Log
 	};
 }
 
+/**
+ * Settings-page counterpart to `createUpdateChecker`'s restart path, for the
+ * handful of tuning values (poll interval, stale-entry guardrails, log
+ * retention/size, healthcheck URL) that are only ever read once at boot into
+ * `config`/the logger/`PositionSync`'s constructor - unlike the risk band and
+ * emergency toggles, nothing re-reads them mid-run, so the settings page
+ * can't make them live without an actual process restart. The UI never
+ * restarts anything itself; it only flips this flag (see
+ * `saveRestartRequiredSettings` in `ui/app/settings/actions.ts`), same "one
+ * caller" discipline as every other `ConfigStore` flag here. Exits with the
+ * same clean-shutdown shape as SIGINT/SIGTERM (UI child stopped first, then
+ * exit 0) so `start.bat`/`start.sh`/`run.sh`'s restart-on-any-exit loop just
+ * brings it back up with the freshly-saved config already on disk.
+ */
+async function maybeApplyRestart(configStore: ConfigStore, log: Logger, uiSupervisor: UiSupervisor): Promise<void> {
+	if (configStore.get('restartRequested') !== 'true') return;
+	configStore.set('restartRequested', 'false');
+	log({ type: 'settings_restart_applying' });
+	await uiSupervisor.stop();
+	process.exit(0);
+}
+
 async function main() {
 	const { dryRun, minMarginPct, maxMarginPct } = parseArgs();
 	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
@@ -274,6 +296,7 @@ async function main() {
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 	await maybeCheckForUpdate();
+	await maybeApplyRestart(configStore, log, uiSupervisor);
 
 	// Full-stop means every cycle is a no-op fetch-nothing early return (see
 	// reconciler.ts) - cheap either way, but there's no reason to burn a full
@@ -305,6 +328,7 @@ async function main() {
 			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
 			await maybeCheckForUpdate();
+			await maybeApplyRestart(configStore, log, uiSupervisor);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });
 			pingFail(config.healthcheckPingUrl, log);
