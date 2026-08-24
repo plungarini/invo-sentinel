@@ -223,14 +223,21 @@ export class HyperliquidClient {
 		return rates;
 	}
 
-	async getPositions(): Promise<HyperliquidPosition[]> {
+	/** Positions and account equity come from the same `clearinghouseState` payload - fetched once here so a caller needing both never pays for it twice. */
+	async getClearinghouseState(): Promise<{ positions: HyperliquidPosition[]; accountValueUsd: number }> {
 		const data = await postInfo({ type: 'clearinghouseState', user: this.walletAddress });
-		return data.assetPositions.filter((p: any) => parseFloat(p.position.szi) !== 0).map((p: any) => p.position);
+		return {
+			positions: data.assetPositions.filter((p: any) => parseFloat(p.position.szi) !== 0).map((p: any) => p.position),
+			accountValueUsd: parseFloat(data.marginSummary.accountValue),
+		};
+	}
+
+	async getPositions(): Promise<HyperliquidPosition[]> {
+		return (await this.getClearinghouseState()).positions;
 	}
 
 	async getAccountValueUsd(): Promise<number> {
-		const data = await postInfo({ type: 'clearinghouseState', user: this.walletAddress });
-		return parseFloat(data.marginSummary.accountValue);
+		return (await this.getClearinghouseState()).accountValueUsd;
 	}
 
 	/**
@@ -294,6 +301,14 @@ export class HyperliquidClient {
 		szDecimals: number,
 		slippagePct = 0.02,
 	): Promise<unknown> {
+		// Deliberately always a fresh, uncached read - never the per-cycle
+		// mids cache used elsewhere for sizing decisions. This price sets the
+		// actual IOC limit price submitted to the exchange; a stale mid here
+		// (even by a few seconds, if reused from earlier in a busy cycle) can
+		// make the order too far off the current book to fill, or land
+		// outside Hyperliquid's own oracle-price acceptance band and get
+		// rejected outright - a real execution-quality risk, not just a minor
+		// staleness tradeoff like the sizing-only reads elsewhere.
 		const mids = await this.getAllMids();
 		const mid = parseFloat(mids[coin]);
 		if (!mid) throw new Error(`No mid price for ${coin}`);
