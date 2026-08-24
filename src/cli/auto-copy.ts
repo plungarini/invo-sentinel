@@ -10,11 +10,12 @@ import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { ConfigStore } from '../services/config-store.js';
 import { shouldUseConsoleTui, startConsoleTui } from '../services/console-tui.js';
-import { CycleFillsCache } from '../services/cycle-fills-cache.js';
+import { CycleCache } from '../services/cycle-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger, type Logger } from '../services/logger.js';
+import { PollCacheService } from '../services/poll-cache.js';
 import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { isCompiledBuild, resolveRootDir } from '../services/root-dir.js';
@@ -117,6 +118,28 @@ function createUpdateChecker(rootDir: string, configStore: ConfigStore, log: Log
 	};
 }
 
+/**
+ * Settings-page counterpart to `createUpdateChecker`'s restart path, for the
+ * handful of tuning values (poll interval, stale-entry guardrails, log
+ * retention/size, healthcheck URL) that are only ever read once at boot into
+ * `config`/the logger/`PositionSync`'s constructor - unlike the risk band and
+ * emergency toggles, nothing re-reads them mid-run, so the settings page
+ * can't make them live without an actual process restart. The UI never
+ * restarts anything itself; it only flips this flag (see
+ * `saveRestartRequiredSettings` in `ui/app/settings/actions.ts`), same "one
+ * caller" discipline as every other `ConfigStore` flag here. Exits with the
+ * same clean-shutdown shape as SIGINT/SIGTERM (UI child stopped first, then
+ * exit 0) so `start.bat`/`start.sh`/`run.sh`'s restart-on-any-exit loop just
+ * brings it back up with the freshly-saved config already on disk.
+ */
+async function maybeApplyRestart(configStore: ConfigStore, log: Logger, uiSupervisor: UiSupervisor): Promise<void> {
+	if (configStore.get('restartRequested') !== 'true') return;
+	configStore.set('restartRequested', 'false');
+	log({ type: 'settings_restart_applying' });
+	await uiSupervisor.stop();
+	process.exit(0);
+}
+
 async function main() {
 	const { dryRun, minMarginPct, maxMarginPct } = parseArgs();
 	const dbPath = join(ROOT_DIR, 'data/sentinel.db');
@@ -204,7 +227,8 @@ async function main() {
 	const followedPortfoliosStore = new FollowedPortfoliosStore(dbPath, log);
 	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
 	const closedTradesStore = new ClosedTradesStore(dbPath, log);
-	const cycleFillsCache = new CycleFillsCache(hl);
+	const cycleCache = new CycleCache(hl);
+	const pollCache = new PollCacheService(log);
 	// Trader mode mirrors onto a portfolio owned by this SAME Invo account
 	// (the one already authenticated via invoRefreshToken above) - reuses
 	// `invo` rather than a second client/token.
@@ -216,11 +240,11 @@ async function main() {
 		staleEntry: config.staleEntry,
 		dryRun,
 		assetMeta: meta.universe,
-		getFillsOnce: () => cycleFillsCache.getOnce(),
+		cycleCache,
 		closedTrades: closedTradesStore,
 		traderModeSync,
 	});
-	const poller = new PortfolioPoller(invo, log);
+	const poller = new PortfolioPoller(invo, log, pollCache);
 	const reconciler = new Reconciler(
 		poller,
 		sync,
@@ -231,7 +255,7 @@ async function main() {
 		portfolioRiskStore,
 		followedPortfoliosStore,
 		cloidAttributionStore,
-		cycleFillsCache,
+		cycleCache,
 		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
 		() => loadTraderModeConfig(configStore),
 		() => loadEmergencyConfig(configStore),
@@ -272,6 +296,7 @@ async function main() {
 	await reconciler.logUntrackedPositions();
 	pingSuccess(config.healthcheckPingUrl, log);
 	await maybeCheckForUpdate();
+	await maybeApplyRestart(configStore, log, uiSupervisor);
 
 	// Full-stop means every cycle is a no-op fetch-nothing early return (see
 	// reconciler.ts) - cheap either way, but there's no reason to burn a full
@@ -303,6 +328,7 @@ async function main() {
 			if (result.adHocPortfolioCount != null) adHocPortfolioCount = result.adHocPortfolioCount;
 			pingSuccess(config.healthcheckPingUrl, log);
 			await maybeCheckForUpdate();
+			await maybeApplyRestart(configStore, log, uiSupervisor);
 		} catch (e: any) {
 			log({ type: 'error', source: 'reconcile', message: e.message });
 			pingFail(config.healthcheckPingUrl, log);

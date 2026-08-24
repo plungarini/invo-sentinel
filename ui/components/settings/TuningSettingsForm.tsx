@@ -2,9 +2,8 @@
 
 import { saveTuningSettings, type ActionState } from '@/app/settings/actions';
 import type { TuningFormValues } from '@/server/daemon/settings';
-import { useActionState, useRef, useState } from 'react';
+import { useActionState, useRef } from 'react';
 import Field from './Field';
-import ToggleRow from './ToggleRow';
 import { useAutoSaveForm } from './useAutoSaveForm';
 
 const INITIAL_STATE: ActionState = { ok: false };
@@ -15,8 +14,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export default function TuningSettingsForm({ defaultValues }: { defaultValues: TuningFormValues }) {
 	const [state, formAction, pending] = useActionState(saveTuningSettings, INITIAL_STATE);
-	const [maxAgeEnabled, setMaxAgeEnabled] = useState(defaultValues.staleEntryMaxAgeEnabled);
-	const [maxProfitEnabled, setMaxProfitEnabled] = useState(defaultValues.staleEntryMaxProfitEnabled);
 	const formRef = useRef<HTMLFormElement>(null);
 	const autoSave = useAutoSaveForm(formRef, { pending });
 
@@ -43,59 +40,6 @@ export default function TuningSettingsForm({ defaultValues }: { defaultValues: T
 						defaultValue={defaultValues.maxLeverage}
 						placeholder="blank = no cap"
 						hint="Leverage is capped here, not rejected."
-					/>
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-4 border-t border-border pt-5">
-				<SectionLabel>Stale entries</SectionLabel>
-
-				<div className="flex flex-col gap-3">
-					<ToggleRow
-						label="Max age guardrail"
-						hint="Past this age, a fresh entry is permanently skipped instead of opened."
-						name="staleEntryMaxAgeEnabled"
-						checked={maxAgeEnabled}
-						onChange={setMaxAgeEnabled}
-					/>
-					<Field
-						label="Max age (minutes)"
-						name="staleEntryMaxAgeMinutes"
-						defaultValue={defaultValues.staleEntryMaxAgeMinutes}
-					/>
-				</div>
-
-				<div className="flex flex-col gap-3 border-t border-border pt-4">
-					<ToggleRow
-						label="Max profit guardrail"
-						hint="Still within the age window but already up this much % is skipped for one cycle."
-						name="staleEntryMaxProfitEnabled"
-						checked={maxProfitEnabled}
-						onChange={setMaxProfitEnabled}
-					/>
-					<Field
-						label="Max profit %"
-						name="staleEntryMaxProfitPct"
-						defaultValue={defaultValues.staleEntryMaxProfitPct}
-					/>
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-3 border-t border-border pt-5">
-				<SectionLabel>Operations</SectionLabel>
-				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-					<Field label="Poll interval (ms)" name="pollIntervalMs" defaultValue={defaultValues.pollIntervalMs} />
-					<Field
-						label="Log retention (hours)"
-						name="logRetentionHours"
-						defaultValue={defaultValues.logRetentionHours}
-					/>
-					<Field label="Log max total size (MB)" name="logMaxTotalMb" defaultValue={defaultValues.logMaxTotalMb} />
-					<Field
-						label="Healthcheck ping URL"
-						name="healthcheckPingUrl"
-						defaultValue={defaultValues.healthcheckPingUrl}
-						placeholder="optional, e.g. healthchecks.io"
 					/>
 				</div>
 			</div>

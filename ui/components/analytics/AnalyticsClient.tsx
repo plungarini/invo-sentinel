@@ -1,15 +1,15 @@
-"use client";
+'use client';
 
-import { useMemo, useState } from "react";
-import OverallPnlSummary from "@/components/analytics/OverallPnlSummary";
-import TradeStatsWidget from "@/components/analytics/TradeStatsWidget";
-import PerPortfolioTable from "@/components/analytics/PerPortfolioTable";
-import ByCoinTable from "@/components/analytics/ByCoinTable";
-import PnlOverTimeChart from "@/components/analytics/PnlOverTimeChart";
-import { useAnalytics } from "@/hooks/useAnalytics";
-import { useTransfers } from "@/hooks/useTransfers";
-import { periodStart, DEFAULT_ANALYTICS_PERIOD } from "@/lib/analyticsPeriod";
-import type { AnalyticsPeriod, AnalyticsSummary } from "@/types/ui";
+import ByCoinTable from '@/components/analytics/ByCoinTable';
+import OverallPnlSummary from '@/components/analytics/OverallPnlSummary';
+import PerPortfolioTable from '@/components/analytics/PerPortfolioTable';
+import PnlOverTimeChart from '@/components/analytics/PnlOverTimeChart';
+import TradeStatsWidget from '@/components/analytics/TradeStatsWidget';
+import { useAnalytics } from '@/hooks/useAnalytics';
+import { useTransfers } from '@/hooks/useTransfers';
+import { DEFAULT_ANALYTICS_PERIOD, periodStart } from '@/lib/analyticsPeriod';
+import type { AnalyticsPeriod, AnalyticsSummary } from '@/types/ui';
+import { useMemo, useState } from 'react';
 
 export default function AnalyticsClient({ initialData }: { initialData: AnalyticsSummary }) {
 	const [period, setPeriod] = useState<AnalyticsPeriod>(DEFAULT_ANALYTICS_PERIOD);
@@ -32,7 +32,7 @@ export default function AnalyticsClient({ initialData }: { initialData: Analytic
 	// re-rendering or flickering. `data` is only ever undefined here on a genuine cold start,
 	// thanks to `keepPreviousData` in useAnalytics - a period switch never blanks the page.
 	return (
-		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
+		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
 			<div className="flex flex-col gap-4">
 				<OverallPnlSummary summary={data} hasError={!!error} period={period} onPeriodChange={setPeriod} />
 				<TradeStatsWidget summary={data} hasError={!!error} />

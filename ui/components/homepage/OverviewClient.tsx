@@ -1,21 +1,21 @@
-"use client";
+'use client';
 
-import { useCycleStatus, type StatusResponse } from "@/hooks/useCycleStatus";
-import { useWallet, type WalletResponse } from "@/hooks/useWallet";
-import { useAnalytics } from "@/hooks/useAnalytics";
-import { useFeesTotal } from "@/hooks/useFeesTotal";
-import TotalBalanceCard from "@/components/shared/TotalBalanceCard";
-import Card from "@/components/shared/Card";
-import Skeleton from "@/components/shared/Skeleton";
-import CycleStatusWidget from "@/components/homepage/CycleStatusWidget";
-import TokenExpiryWidget from "@/components/homepage/TokenExpiryWidget";
-import AgentKeyExpiryWidget from "@/components/homepage/AgentKeyExpiryWidget";
-import DaemonHealthWidget from "@/components/homepage/DaemonHealthWidget";
-import AvgPollTimeWidget from "@/components/homepage/AvgPollTimeWidget";
-import TrackedPositionsWidget from "@/components/homepage/TrackedPositionsWidget";
-import RecentActivityWidget from "@/components/homepage/RecentActivityWidget";
-import { formatUsd } from "@/lib/format";
-import type { AnalyticsSummary } from "@/types/ui";
+import AgentKeyExpiryWidget from '@/components/homepage/AgentKeyExpiryWidget';
+import AvgPollTimeWidget from '@/components/homepage/AvgPollTimeWidget';
+import CycleStatusWidget from '@/components/homepage/CycleStatusWidget';
+import DaemonHealthWidget from '@/components/homepage/DaemonHealthWidget';
+import RecentActivityWidget from '@/components/homepage/RecentActivityWidget';
+import TokenExpiryWidget from '@/components/homepage/TokenExpiryWidget';
+import TrackedPositionsWidget from '@/components/homepage/TrackedPositionsWidget';
+import Card from '@/components/shared/Card';
+import Skeleton from '@/components/shared/Skeleton';
+import TotalBalanceCard from '@/components/shared/TotalBalanceCard';
+import { useAnalytics } from '@/hooks/useAnalytics';
+import { useCycleStatus, type StatusResponse } from '@/hooks/useCycleStatus';
+import { useFeesTotal } from '@/hooks/useFeesTotal';
+import { useWallet, type WalletResponse } from '@/hooks/useWallet';
+import { formatUsd } from '@/lib/format';
+import type { AnalyticsSummary } from '@/types/ui';
 
 /** Matches a single-StatTile Card's rough footprint while cycle status is still loading. */
 function WidgetSkeleton() {
@@ -47,7 +47,7 @@ export default function OverviewClient({
 	const { data: wallet } = useWallet(initialWallet);
 	// Footer (All-time PnL/Win Rate) genuinely needs the full aggregation; the
 	// Fees stat below uses the lightweight, Wallet-shared useFeesTotal instead.
-	const { data: analytics } = useAnalytics("all", initialAnalytics);
+	const { data: analytics } = useAnalytics('all', initialAnalytics);
 	const { data: feesData } = useFeesTotal(initialFees);
 
 	// The balance banner only ever depends on `wallet`/`analytics`/`feesData`,
@@ -55,14 +55,16 @@ export default function OverviewClient({
 	// `data` (cycle status). Only the cycle-status-driven widgets below it
 	// need a loading/error swap.
 	return (
-		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
+		<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pb-24 pr-1.5 -mr-1.5 pt-14 md:pb-6 md:pt-0">
 			<div className="flex flex-col gap-4">
 				{/* Snapshot - the actual "at a glance" overview: balance, open exposure, all-time performance */}
 				<TotalBalanceCard
 					size="sm"
 					accountValueUsd={wallet?.accountValueUsd ?? 0}
 					availableUsd={
-						wallet ? wallet.accountValueUsd - wallet.positions.reduce((sum, p) => sum + parseFloat(p.marginUsed), 0) : undefined
+						wallet
+							? wallet.accountValueUsd - wallet.positions.reduce((sum, p) => sum + parseFloat(p.marginUsed), 0)
+							: undefined
 					}
 					feesUsd={feesData?.totalFeesUsd}
 					footer={
@@ -70,24 +72,28 @@ export default function OverviewClient({
 							<div className="shrink-0">
 								<p className="text-[12px] text-text-muted">Open Positions</p>
 								<p className="text-[20px] font-bold tabular-nums tracking-[-0.02em]">
-									{wallet ? wallet.positions.length : "N/A"}
+									{wallet ? wallet.positions.length : 'N/A'}
 								</p>
 							</div>
 							<div className="shrink-0">
 								<p className="text-[12px] text-text-muted">All-time PnL</p>
 								<p
 									className={`text-[20px] font-bold tabular-nums tracking-[-0.02em] ${
-										analytics ? (analytics.totalPnlUsd - analytics.totalFeesUsd >= 0 ? "text-profit" : "text-loss") : ""
+										analytics ? (analytics.totalPnlUsd - analytics.totalFeesUsd >= 0 ? 'text-profit' : 'text-loss') : ''
 									}`}
-									title={analytics && analytics.totalFeesUsd > 0 ? `Net of ${formatUsd(analytics.totalFeesUsd)} in fees` : undefined}
+									title={
+										analytics && analytics.totalFeesUsd > 0
+											? `Net of ${formatUsd(analytics.totalFeesUsd)} in fees`
+											: undefined
+									}
 								>
-									{analytics ? formatUsd(analytics.totalPnlUsd - analytics.totalFeesUsd) : "N/A"}
+									{analytics ? formatUsd(analytics.totalPnlUsd - analytics.totalFeesUsd) : 'N/A'}
 								</p>
 							</div>
 							<div className="shrink-0 text-right">
 								<p className="text-[12px] text-text-muted">Win Rate</p>
 								<p className="text-[20px] font-bold tabular-nums tracking-[-0.02em]">
-									{analytics ? `${analytics.winRate.toFixed(2)}%` : "N/A"}
+									{analytics ? `${analytics.winRate.toFixed(2)}%` : 'N/A'}
 								</p>
 							</div>
 						</div>
