@@ -4,6 +4,7 @@ import Sidebar from "@/components/layout/Sidebar";
 import MobileTabBar from "@/components/layout/MobileTabBar";
 import RightRail from "@/components/layout/RightRail";
 import ServiceWorkerRegister from "@/components/layout/ServiceWorkerRegister";
+import RestartWatcher from "@/components/layout/RestartWatcher";
 import SetupWizard from "@/components/settings/SetupWizard";
 import { getWizardPrefill, shouldShowSetupWizard } from "@/server/daemon/settings";
 import { APP_VERSION } from "@daemon/version.js";
@@ -71,6 +72,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 				)}
 				<MobileTabBar />
 				<ServiceWorkerRegister />
+				<RestartWatcher />
 			</body>
 		</html>
 	);

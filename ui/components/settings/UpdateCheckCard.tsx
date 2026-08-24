@@ -2,45 +2,9 @@
 
 import { applyUpdateNow, checkForUpdatesNow, type ActionState } from '@/app/settings/actions';
 import Button from '@/components/shared/Button';
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState } from 'react';
 
 const INITIAL_STATE: ActionState = { ok: false };
-const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 3 * 60 * 1000;
-
-/**
- * Applying an update kills and restarts the UI's own Node process for the
- * file swap (see auto-copy.ts's process.exit(42) / start.bat/start.sh) - a
- * tab left open across that window gets 502s while it's down, then a React
- * hydration error once it's back up serving a different build's JS chunks
- * to a page instance that already loaded the old ones. A full reload once
- * the server is confirmed responsive again sidesteps both: no stale chunks,
- * no manual refresh needed.
- */
-function useRestartWatcher(active: boolean) {
-	const [timedOut, setTimedOut] = useState(false);
-
-	useEffect(() => {
-		if (!active) return;
-		const startedAt = Date.now();
-		const interval = setInterval(async () => {
-			if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-				setTimedOut(true);
-				clearInterval(interval);
-				return;
-			}
-			try {
-				const res = await fetch('/api/status', { cache: 'no-store' });
-				if (res.ok) window.location.reload();
-			} catch {
-				// Expected while the process is down/mid-restart - keep polling.
-			}
-		}, POLL_INTERVAL_MS);
-		return () => clearInterval(interval);
-	}, [active]);
-
-	return timedOut;
-}
 
 export default function UpdateCheckCard({
 	currentVersion,
@@ -53,7 +17,6 @@ export default function UpdateCheckCard({
 }) {
 	const [checkState, checkAction, checkPending] = useActionState(checkForUpdatesNow, INITIAL_STATE);
 	const [applyState, applyAction, applyPending] = useActionState(applyUpdateNow, INITIAL_STATE);
-	const restartTimedOut = useRestartWatcher(applyState.ok);
 
 	const updateAvailable = !!latestVersionSeen && latestVersionSeen !== currentVersion;
 
@@ -84,16 +47,10 @@ export default function UpdateCheckCard({
 				)}
 			</div>
 
-			{applyState.ok && !restartTimedOut && (
+			{applyState.ok && (
 				<p className="text-[13px] text-badge-amber">
 					Update requested - the daemon will restart to apply it. This page will reload automatically once it&apos;s
-					back (usually a few seconds).
-				</p>
-			)}
-			{applyState.ok && restartTimedOut && (
-				<p className="text-[13px] text-loss">
-					Still waiting on the daemon to come back after {Math.round(POLL_TIMEOUT_MS / 60000)} minutes - check it
-					directly (e.g. SSH into the Pi) rather than continuing to wait here.
+					back (usually a few seconds; check the daemon directly if it takes longer than a couple of minutes).
 				</p>
 			)}
 			{checkState.ok && (
