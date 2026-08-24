@@ -1,15 +1,15 @@
-import Link from "next/link";
-import { ChevronRight } from "lucide-react";
-import { BarChartAiIcon } from "@/components/icons/Icons";
-import PageHeader from "@/components/shared/PageHeader";
-import Card from "@/components/shared/Card";
+import { BarChartAiIcon } from '@/components/icons/Icons';
+import Card from '@/components/shared/Card';
+import PageHeader from '@/components/shared/PageHeader';
+import { ChevronRight } from 'lucide-react';
+import Link from 'next/link';
 
 const TOOLS = [
 	{
-		href: "/tools/portfolio-analysis",
+		href: '/tools/portfolio-analysis',
 		icon: BarChartAiIcon,
-		title: "Portfolio Analysis",
-		description: "Look up any portfolio by ID and see its trading stats.",
+		title: 'Portfolio Analysis',
+		description: 'Look up any portfolio by ID and see its trading stats.',
 	},
 ];
 
@@ -17,7 +17,7 @@ export default function ToolsPage() {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<PageHeader title="Tools" />
-			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-3 pt-14 md:pb-6 md:pt-0">
+			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pb-24 pr-3 pt-14 md:pb-6 md:pt-0">
 				<div className="flex flex-col gap-2.5">
 					{TOOLS.map((tool) => {
 						const Icon = tool.icon;

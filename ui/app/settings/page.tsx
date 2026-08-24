@@ -1,15 +1,15 @@
-import PageHeader from "@/components/shared/PageHeader";
-import Card from "@/components/shared/Card";
-import RequiredSecretsForm from "@/components/settings/RequiredSecretsForm";
-import TuningSettingsForm from "@/components/settings/TuningSettingsForm";
-import TraderModeSettingsForm from "@/components/settings/TraderModeSettingsForm";
-import EmergencySettingsForm from "@/components/settings/EmergencySettingsForm";
-import UpdateSettingsForm from "@/components/settings/UpdateSettingsForm";
-import UpdateCheckCard from "@/components/settings/UpdateCheckCard";
-import CredentialInstructions from "@/components/settings/CredentialInstructions";
-import { getSettingsFormValues } from "@/server/daemon/settings";
+import CredentialInstructions from '@/components/settings/CredentialInstructions';
+import EmergencySettingsForm from '@/components/settings/EmergencySettingsForm';
+import RequiredSecretsForm from '@/components/settings/RequiredSecretsForm';
+import TraderModeSettingsForm from '@/components/settings/TraderModeSettingsForm';
+import TuningSettingsForm from '@/components/settings/TuningSettingsForm';
+import UpdateCheckCard from '@/components/settings/UpdateCheckCard';
+import UpdateSettingsForm from '@/components/settings/UpdateSettingsForm';
+import Card from '@/components/shared/Card';
+import PageHeader from '@/components/shared/PageHeader';
+import { getSettingsFormValues } from '@/server/daemon/settings';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
 	const { secrets, tuning, traderMode, emergency, update } = await getSettingsFormValues();
@@ -17,7 +17,7 @@ export default async function SettingsPage() {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<PageHeader title="Settings" />
-			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-1 pb-24 pr-3 pt-14 md:pb-6 md:pt-0">
+			<div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pb-24 pr-3 pt-14 md:pb-6 md:pt-0">
 				<div className="flex flex-col gap-6">
 					<Card title="Emergency">
 						{/* Keyed on content, same React 19 controlled-checkbox auto-reset
