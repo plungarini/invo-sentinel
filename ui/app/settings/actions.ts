@@ -112,6 +112,37 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 			}
 		}
 
+		getConfigStore().setMany({
+			minMarginPct: String(minMarginPct),
+			maxMarginPct: String(maxMarginPct),
+			// Written as an explicit empty row, not deleted - row *presence* is what
+			// makes a DB value authoritative over `.env` (see `readValue`), so a
+			// deleted row would silently fall back to a stale `.env` value instead
+			// of actually clearing the field.
+			maxLeverage: maxLeverageRaw,
+		});
+
+		invalidateConfigCache();
+		revalidatePath("/settings");
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/**
+ * Counterpart to `saveTuningSettings` for the fields that are only ever read
+ * once at boot (`auto-copy.ts`'s `config`/logger/`PositionSync` are all built
+ * from the boot-time snapshot, never re-read mid-run) - unlike the risk band
+ * above, saving these alone would silently do nothing until the next
+ * incidental restart. `restartRequested` is the same one-flag-in-the-shared-
+ * DB pattern as `updateManualApplyRequested`: this action never restarts
+ * anything itself, it only flips the row; `maybeApplyRestart` in
+ * `auto-copy.ts` is the sole place that acts on it, polled once per cycle at
+ * a safe point right after a reconcile completes.
+ */
+export async function saveRestartRequiredSettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
+	try {
 		const staleEntryMaxAgeMinutes = requireNumber(formData, "staleEntryMaxAgeMinutes", { min: 0 });
 		const staleEntryMaxProfitPct = requireNumber(formData, "staleEntryMaxProfitPct", { min: 0 });
 		const staleEntryMaxAgeEnabled = formData.get("staleEntryMaxAgeEnabled") === "on";
@@ -121,10 +152,7 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 		const logMaxTotalMb = requireNumber(formData, "logMaxTotalMb", { min: 0 });
 		const healthcheckPingUrl = String(formData.get("healthcheckPingUrl") ?? "").trim();
 
-		const configStore = getConfigStore();
-		configStore.setMany({
-			minMarginPct: String(minMarginPct),
-			maxMarginPct: String(maxMarginPct),
+		getConfigStore().setMany({
 			staleEntryMaxAgeMinutes: String(staleEntryMaxAgeMinutes),
 			staleEntryMaxProfitPct: String(staleEntryMaxProfitPct),
 			staleEntryMaxAgeEnabled: String(staleEntryMaxAgeEnabled),
@@ -132,12 +160,8 @@ export async function saveTuningSettings(_prev: ActionState, formData: FormData)
 			pollIntervalMs: String(pollIntervalMs),
 			logRetentionHours: String(logRetentionHours),
 			logMaxTotalMb: String(logMaxTotalMb),
-			// Written as an explicit empty row, not deleted - row *presence* is what
-			// makes a DB value authoritative over `.env` (see `readValue`), so a
-			// deleted row would silently fall back to a stale `.env` value instead
-			// of actually clearing the field.
-			maxLeverage: maxLeverageRaw,
 			healthcheckPingUrl,
+			restartRequested: "true",
 		});
 
 		invalidateConfigCache();
