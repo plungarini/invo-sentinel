@@ -2,10 +2,11 @@ import { randomBytes, randomUUID } from 'crypto';
 import { extractAvgFillPrice, orderFillError, type AssetMeta, type HyperliquidClient } from '../clients/hyperliquid-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
 import type { ClosedTradesStore } from '../services/closed-trades-store.js';
+import type { CycleCache } from '../services/cycle-cache.js';
 import type { Logger } from '../services/logger.js';
 import { clampLeverage, clampMarginFraction } from '../services/risk-policy.js';
 import { evaluateStaleEntry, type StaleEntryConfig } from '../services/stale-entry-policy.js';
-import type { HyperliquidFill, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
+import type { HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
 import { resolveConflictByCloid } from './cloid-attribution.js';
 import type { TraderModeSync } from './trader-mode-sync.js';
 
@@ -27,8 +28,8 @@ export interface PositionSyncOptions {
 	staleEntry: StaleEntryConfig;
 	dryRun: boolean;
 	assetMeta: AssetMeta[];
-	/** Memoized per-cycle - conflicts are rare, so this only actually calls HL when one occurs, and at most once per cycle regardless of how many. */
-	getFillsOnce: () => Promise<HyperliquidFill[]>;
+	/** Per-cycle memoization for fills/positions/equity/mids - conflicts are rare and equity+mids are read on every investment, so this keeps each of those to at most one real HL call per cycle regardless of how many investments/checks need them. */
+	cycleCache: CycleCache;
 	/** Durable closed-trade history - written once per real close, so portfolio-level analytics survive both the close and a later unfollow. */
 	closedTrades: ClosedTradesStore;
 	/** Best-effort side effect mirroring our own actions onto a separate "Trader mode" Invo portfolio - see trader-mode-sync.ts. */
@@ -81,7 +82,7 @@ export class PositionSync {
 		traderMode: TraderModeConfig,
 		noNewPositions = false,
 	): Promise<void> {
-		const { log, staleEntry, dryRun, hl, invo, getFillsOnce, traderModeSync } = this.opts;
+		const { log, staleEntry, dryRun, hl, invo, cycleCache, traderModeSync } = this.opts;
 		const coin = investment.ticker;
 
 		if (ignored[baseId]) {
@@ -156,7 +157,7 @@ export class PositionSync {
 		}
 
 		const clampedFraction = clampMarginFraction(rawPercent, risk);
-		const [equity, mids] = await Promise.all([hl.getAccountValueUsd(), hl.getAllMids()]);
+		const [equity, mids] = await Promise.all([cycleCache.getAccountValueUsdOnce(), cycleCache.getAllMidsOnce()]);
 
 		const entry = state[baseId] ?? {
 			coin,
@@ -190,7 +191,7 @@ export class PositionSync {
 		//    before computing the delta, so the next order moves from where
 		//    the position actually is, not from a stale internal guess.
 		if (entry.ourBaseShortId) {
-			const livePositions = await hl.getPositions();
+			const livePositions = await cycleCache.getPositionsOnce();
 			const realPosition = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
 			if (!realPosition) {
 				ignored[baseId] = {
@@ -292,7 +293,7 @@ export class PositionSync {
 		// position's own order cloid (cloid-attribution.ts) to know exactly
 		// which one, instead of guessing. Only flag it if that's inconclusive.
 		if (!entry.ourBaseShortId) {
-			const livePositions = await hl.getPositions();
+			const livePositions = await cycleCache.getPositionsOnce();
 			const existing = livePositions.find((p) => p.coin === coin && parseFloat(p.szi) !== 0);
 			if (existing) {
 				const directionMatches = parseFloat(existing.szi) > 0 === isBuy;
@@ -315,7 +316,7 @@ export class PositionSync {
 				let adopt = sameDirectionRivals.length === 0;
 
 				if (!adopt) {
-					const fills = await getFillsOnce();
+					const fills = await cycleCache.getFillsOnce();
 					const resolvedBaseId = resolveConflictByCloid(fills, coin, [investment, ...sameDirectionRivals]);
 					if (resolvedBaseId === baseId) {
 						adopt = true;

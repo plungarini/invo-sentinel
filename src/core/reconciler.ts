@@ -2,7 +2,8 @@ import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { RateLimitExhaustedError } from '../clients/invo-client.js';
 import type { InvoClient } from '../clients/invo-client.js';
 import type { CloidAttributionStore } from '../services/cloid-attribution-store.js';
-import type { CycleFillsCache } from '../services/cycle-fills-cache.js';
+import { mapWithConcurrency } from '../services/concurrency.js';
+import type { CycleCache } from '../services/cycle-cache.js';
 import type { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import type { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import type { Logger } from '../services/logger.js';
@@ -37,6 +38,9 @@ export class Reconciler {
 	/** baseIds already logged as detached-from-an-unfollowed-portfolio, so the transition is logged once, not every cycle for as long as the real position stays open. */
 	private loggedDetachedBaseIds = new Set<string>();
 
+	/** Bounded, not unlimited - keeps a large follow count from bursting every get_investments call at once while still cutting the old fully-sequential loop down to roughly one round trip's worth of wall-clock time per batch of this size. */
+	private static readonly INVO_FETCH_CONCURRENCY = 5;
+
 	constructor(
 		private poller: PortfolioPoller,
 		private sync: PositionSync,
@@ -47,7 +51,7 @@ export class Reconciler {
 		private portfolioRiskStore: PortfolioRiskStore,
 		private followedPortfoliosStore: FollowedPortfoliosStore,
 		private cloidAttributionStore: CloidAttributionStore,
-		private cycleFillsCache: CycleFillsCache,
+		private cycleCache: CycleCache,
 		/** Called once at the top of every cycle, not just at construction - a settings-page edit to the global margin band takes effect on the next cycle, not just at daemon restart. */
 		private getGlobalRisk: () => RiskConfig,
 		/** Same convention as `getGlobalRisk` - re-read fresh every cycle so a Trader-mode settings change takes effect on the next cycle. */
@@ -104,7 +108,7 @@ export class Reconciler {
 		const state = this.stateStore.load();
 		const ignored = this.ignoredStore.load();
 		const cloidCache = this.cloidAttributionStore.load();
-		this.cycleFillsCache.reset();
+		this.cycleCache.reset();
 
 		let portfolios: FollowedPortfolio[];
 		try {
@@ -149,67 +153,67 @@ export class Reconciler {
 		}
 
 		const perPortfolio: { portfolioId: string; title: string; investments: OpenInvestment[] | null; isAdHoc: boolean }[] = [];
-		let rateLimitExhausted = false;
 
-		for (const [i, portfolio] of portfolios.entries()) {
-			if (rateLimitExhausted) {
-				perPortfolio.push({ portfolioId: portfolio.id, title: portfolio.title, investments: null, isAdHoc: false });
+		// Fetched concurrently (bounded, see INVO_FETCH_CONCURRENCY) rather than
+		// one at a time - these reads have no ordering dependency on each
+		// other, only on completing before the processing loop below starts
+		// (needed for same-coin conflict detection to see the whole picture at
+		// once). Concurrency doesn't change the total call volume Invo's own
+		// rate limit cares about (a sustained requests-per-300s budget, not a
+		// concurrency cap) - it only changes how long this phase takes wall-
+		// clock, from "N sequential round trips" to roughly "one round trip's
+		// worth of time, N/concurrency times over".
+		const followedResults = await mapWithConcurrency(portfolios, Reconciler.INVO_FETCH_CONCURRENCY, (portfolio) =>
+			this.poller.fetchOpenInvestments(portfolio.id),
+		);
+
+		let rateLimitExhausted = false;
+		const rateLimitedFollowedTitles: string[] = [];
+		for (const [i, result] of followedResults.entries()) {
+			const portfolio = portfolios[i];
+			if (result.status === 'fulfilled') {
+				perPortfolio.push({ portfolioId: portfolio.id, title: portfolio.title, investments: result.value, isAdHoc: false });
 				continue;
 			}
-			try {
-				perPortfolio.push({
-					portfolioId: portfolio.id,
-					title: portfolio.title,
-					investments: await this.poller.fetchOpenInvestments(portfolio.id),
-					isAdHoc: false,
-				});
-			} catch (e: any) {
-				if (e instanceof RateLimitExhaustedError) {
-					// Shared IP budget is down - every remaining portfolio this cycle would fail the same way; stop here, retry next cycle.
-					rateLimitExhausted = true;
-					const remaining = portfolios.slice(i);
-					this.log({
-						type: 'rate_limit_exhausted_skipping_rest_of_cycle',
-						portfolioId: portfolio.id,
-						title: portfolio.title,
-						skippedCount: remaining.length,
-						skippedPortfolios: remaining.map((p) => p.title),
-					});
-					for (const skipped of remaining) {
-						if (skipped.id === portfolio.id) continue;
-						perPortfolio.push({ portfolioId: skipped.id, title: skipped.title, investments: null, isAdHoc: false });
-					}
-					perPortfolio.push({ portfolioId: portfolio.id, title: portfolio.title, investments: null, isAdHoc: false });
-					continue;
-				}
-				this.log({
-					type: 'error',
-					source: 'fetch_open_investments',
-					portfolioId: portfolio.id,
-					title: portfolio.title,
-					message: e.message,
-				});
-				perPortfolio.push({ portfolioId: portfolio.id, title: portfolio.title, investments: null, isAdHoc: false }); // null = fetch failed; skip close-detection for it below
+			const e = result.reason;
+			if (e instanceof RateLimitExhaustedError) {
+				rateLimitExhausted = true;
+				rateLimitedFollowedTitles.push(portfolio.title);
+			} else {
+				this.log({ type: 'error', source: 'fetch_open_investments', portfolioId: portfolio.id, title: portfolio.title, message: e.message });
 			}
+			perPortfolio.push({ portfolioId: portfolio.id, title: portfolio.title, investments: null, isAdHoc: false }); // null = fetch failed; skip close-detection for it below
+		}
+		if (rateLimitedFollowedTitles.length > 0) {
+			this.log({ type: 'rate_limit_exhausted_this_cycle', scope: 'followed', affectedCount: rateLimitedFollowedTitles.length, affectedPortfolios: rateLimitedFollowedTitles });
 		}
 
-		for (const portfolioId of adHocPortfolioIds) {
-			const title = `ad-hoc:${portfolioId}`;
-			if (rateLimitExhausted) {
-				perPortfolio.push({ portfolioId, title, investments: null, isAdHoc: true });
-				continue;
+		const adHocIds = [...adHocPortfolioIds];
+		if (rateLimitExhausted) {
+			// Shared IP budget is down - every ad-hoc fetch this cycle would fail the same way; don't even attempt them, retry next cycle.
+			this.log({ type: 'cycle_skipped_rest_rate_limited', scope: 'ad_hoc', skippedCount: adHocIds.length });
+			for (const portfolioId of adHocIds) {
+				perPortfolio.push({ portfolioId, title: `ad-hoc:${portfolioId}`, investments: null, isAdHoc: true });
 			}
-			try {
-				perPortfolio.push({ portfolioId, title, investments: await this.poller.fetchOpenInvestments(portfolioId), isAdHoc: true });
-			} catch (e: any) {
-				if (e instanceof RateLimitExhaustedError) {
-					rateLimitExhausted = true;
-					this.log({ type: 'rate_limit_exhausted_skipping_rest_of_cycle', portfolioId, isAdHoc: true });
-					perPortfolio.push({ portfolioId, title, investments: null, isAdHoc: true });
+		} else {
+			const adHocResults = await mapWithConcurrency(adHocIds, Reconciler.INVO_FETCH_CONCURRENCY, (portfolioId) =>
+				this.poller.fetchOpenInvestments(portfolioId),
+			);
+			const rateLimitedAdHocIds: string[] = [];
+			for (const [i, result] of adHocResults.entries()) {
+				const portfolioId = adHocIds[i];
+				const title = `ad-hoc:${portfolioId}`;
+				if (result.status === 'fulfilled') {
+					perPortfolio.push({ portfolioId, title, investments: result.value, isAdHoc: true });
 					continue;
 				}
-				this.log({ type: 'error', source: 'fetch_open_investments', portfolioId, isAdHoc: true, message: e.message });
+				const e = result.reason;
+				if (e instanceof RateLimitExhaustedError) rateLimitedAdHocIds.push(portfolioId);
+				else this.log({ type: 'error', source: 'fetch_open_investments', portfolioId, isAdHoc: true, message: e.message });
 				perPortfolio.push({ portfolioId, title, investments: null, isAdHoc: true });
+			}
+			if (rateLimitedAdHocIds.length > 0) {
+				this.log({ type: 'rate_limit_exhausted_this_cycle', scope: 'ad_hoc', affectedCount: rateLimitedAdHocIds.length, affectedPortfolios: rateLimitedAdHocIds });
 			}
 		}
 
@@ -279,7 +283,7 @@ export class Reconciler {
 		}
 
 		// Never blocks the rest of the cycle on failure - same as every other
-		// HL/Invo call in this file, but this one's own hl.getPositions() at
+		// HL/Invo call in this file, but this one's own positions read at
 		// the top isn't behind any of the existing per-portfolio/per-
 		// investment try/catches, so it needs its own (confirmed live
 		// 2026-08-15: an HL API blip here propagated all the way out of
@@ -325,7 +329,7 @@ export class Reconciler {
 			// risking treating "we couldn't check" as "it's gone".
 			let livePositions: HyperliquidPosition[] | null = null;
 			try {
-				livePositions = await this.hl.getPositions();
+				livePositions = await this.cycleCache.getPositionsOnce();
 			} catch (e: any) {
 				this.log({ type: 'error', source: 'detached_position_check', message: e.message });
 			}
@@ -379,6 +383,17 @@ export class Reconciler {
 		const openBaseIds = new Set(investments.map((inv) => inv.baseId));
 
 		for (const investment of relevantInvestments) {
+			// Save is safety-critical (state-store.ts: a crash between a real
+			// order and an unsaved state update would replay that order next
+			// cycle), so it must still happen unconditionally whenever this
+			// baseId's entry actually changed - but the common steady-state
+			// case (nothing to adjust, already ignored, unknown coin, etc.)
+			// touches neither map at all, and saving on every one of those
+			// no-op investments was pure wasted disk I/O. Comparing before/
+			// after catches every real mutation (including a bare
+			// portfolioTitle refresh) while skipping the no-op majority.
+			const stateBefore = JSON.stringify(state[investment.baseId]);
+			const ignoredBefore = ignored[investment.baseId];
 			try {
 				await this.sync.openOrAdjust(investment.baseId, investment, state, investmentsByCoin, ignored, risk, traderMode, noNewPositions);
 			} catch (e: any) {
@@ -390,8 +405,8 @@ export class Reconciler {
 					message: e.message,
 				});
 			}
-			this.stateStore.save(state);
-			this.ignoredStore.save(ignored);
+			if (JSON.stringify(state[investment.baseId]) !== stateBefore) this.stateStore.save(state);
+			if (ignored[investment.baseId] !== ignoredBefore) this.ignoredStore.save(ignored);
 		}
 
 		// Anything tracked for THIS portfolio that's no longer in its open
@@ -399,12 +414,17 @@ export class Reconciler {
 		for (const [baseId, entry] of Object.entries(state)) {
 			if (entry.portfolioId !== portfolioId) continue;
 			if (openBaseIds.has(baseId)) continue;
+			const trackedBefore = !!state[baseId];
 			try {
 				await this.sync.close(baseId, state, traderMode, portfolioTitle);
 			} catch (e: any) {
 				this.log({ type: 'error', source: 'close', baseId, coin: entry.coin, message: e.message });
 			}
-			this.stateStore.save(state);
+			// close() either fully commits (deletes the entry) or leaves state
+			// completely untouched (e.g. order_rejected) - never a partial
+			// mutation - so "did it get removed" is a sufficient and cheap
+			// dirty check here, no JSON diff needed.
+			if (trackedBefore && !state[baseId]) this.stateStore.save(state);
 		}
 
 		// Same cleanup for ignored baseIds: once that investment is gone
@@ -441,8 +461,8 @@ export class Reconciler {
 		traderMode: TraderModeConfig,
 		noNewPositions: boolean,
 	): Promise<void> {
-		const positions = await this.hl.getPositions();
-		const { resolved } = await discoverCloidAttributedCoins(this.hl, this.invo, positions, state, cloidCache, this.log);
+		const positions = await this.cycleCache.getPositionsOnce();
+		const { resolved } = await discoverCloidAttributedCoins(() => this.cycleCache.getFillsOnce(), this.invo, positions, state, cloidCache, this.log);
 		if (resolved.size === 0) return;
 
 		const byPortfolio = new Map<string, { coin: string; attribution: ResolvedAttribution }[]>();
@@ -478,10 +498,14 @@ export class Reconciler {
 					continue;
 				}
 
+				const stateBefore = JSON.stringify(state[investment.baseId]);
+				let ignoredDirty = false;
 				if (ignored[investment.baseId]) {
 					this.log({ type: 'cloid_rescued_from_ignored', baseId: investment.baseId, coin, previousReason: ignored[investment.baseId].reason });
 					delete ignored[investment.baseId];
+					ignoredDirty = true;
 				}
+				const ignoredBefore = ignored[investment.baseId];
 
 				// The coin's only real candidate is the one cloid decoding just
 				// confirmed - override investmentsByCoin so openOrAdjust's own
@@ -498,8 +522,8 @@ export class Reconciler {
 					if (originalCoinInvestments) investmentsByCoin.set(coin, originalCoinInvestments);
 					else investmentsByCoin.delete(coin);
 				}
-				this.stateStore.save(state);
-				this.ignoredStore.save(ignored);
+				if (JSON.stringify(state[investment.baseId]) !== stateBefore) this.stateStore.save(state);
+				if (ignoredDirty || ignored[investment.baseId] !== ignoredBefore) this.ignoredStore.save(ignored);
 			}
 		}
 	}
@@ -515,7 +539,7 @@ export class Reconciler {
 		try {
 			const state = this.stateStore.load();
 			const trackedCoins = new Set(Object.values(state).map((s) => s.coin));
-			const livePositions = await this.hl.getPositions();
+			const livePositions = await this.cycleCache.getPositionsOnce();
 			const untracked = livePositions.filter((p) => !trackedCoins.has(p.coin));
 			if (untracked.length > 0) {
 				this.log({

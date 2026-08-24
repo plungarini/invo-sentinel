@@ -10,11 +10,12 @@ import { CloidAttributionStore } from '../services/cloid-attribution-store.js';
 import { ClosedTradesStore } from '../services/closed-trades-store.js';
 import { ConfigStore } from '../services/config-store.js';
 import { shouldUseConsoleTui, startConsoleTui } from '../services/console-tui.js';
-import { CycleFillsCache } from '../services/cycle-fills-cache.js';
+import { CycleCache } from '../services/cycle-cache.js';
 import { FollowedPortfoliosStore } from '../services/followed-portfolios-store.js';
 import { pingFail, pingFailAwaited, pingStart, pingSuccess } from '../services/healthcheck.js';
 import { IgnoredTradesStore } from '../services/ignored-trades-store.js';
 import { createLogger, type Logger } from '../services/logger.js';
+import { PollCacheService } from '../services/poll-cache.js';
 import { computeSafePollIntervalMs } from '../services/poll-schedule.js';
 import { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { isCompiledBuild, resolveRootDir } from '../services/root-dir.js';
@@ -204,7 +205,8 @@ async function main() {
 	const followedPortfoliosStore = new FollowedPortfoliosStore(dbPath, log);
 	const cloidAttributionStore = new CloidAttributionStore(dbPath, log);
 	const closedTradesStore = new ClosedTradesStore(dbPath, log);
-	const cycleFillsCache = new CycleFillsCache(hl);
+	const cycleCache = new CycleCache(hl);
+	const pollCache = new PollCacheService(log);
 	// Trader mode mirrors onto a portfolio owned by this SAME Invo account
 	// (the one already authenticated via invoRefreshToken above) - reuses
 	// `invo` rather than a second client/token.
@@ -216,11 +218,11 @@ async function main() {
 		staleEntry: config.staleEntry,
 		dryRun,
 		assetMeta: meta.universe,
-		getFillsOnce: () => cycleFillsCache.getOnce(),
+		cycleCache,
 		closedTrades: closedTradesStore,
 		traderModeSync,
 	});
-	const poller = new PortfolioPoller(invo, log);
+	const poller = new PortfolioPoller(invo, log, pollCache);
 	const reconciler = new Reconciler(
 		poller,
 		sync,
@@ -231,7 +233,7 @@ async function main() {
 		portfolioRiskStore,
 		followedPortfoliosStore,
 		cloidAttributionStore,
-		cycleFillsCache,
+		cycleCache,
 		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
 		() => loadTraderModeConfig(configStore),
 		() => loadEmergencyConfig(configStore),

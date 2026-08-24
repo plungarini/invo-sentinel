@@ -1,5 +1,4 @@
 import type { InvoClient } from '../clients/invo-client.js';
-import type { HyperliquidClient } from '../clients/hyperliquid-client.js';
 import { decodeCloidToBaseShortId } from '../services/cloid-codec.js';
 import type { Logger } from '../services/logger.js';
 import type { CloidAttributionCache, HyperliquidFill, HyperliquidPosition, OpenInvestment, PositionStateMap } from '../types.js';
@@ -56,7 +55,8 @@ export function resolveConflictByCloid(fills: HyperliquidFill[], coin: string, c
  * actually unexplained.
  */
 export async function discoverCloidAttributedCoins(
-	hl: HyperliquidClient,
+	/** Per-cycle memoized, not a raw HL call - PositionSync's own conflict resolution may already have fetched fills this cycle; passing the getter (rather than `hl` directly) means this never pays for a second `getUserFills()` call in the same cycle. */
+	getFillsOnce: () => Promise<HyperliquidFill[]>,
 	invo: InvoClient,
 	positions: HyperliquidPosition[],
 	state: PositionStateMap,
@@ -82,7 +82,7 @@ export async function discoverCloidAttributedCoins(
 
 	if (toCheck.length === 0) return { resolved, cacheChanged };
 
-	const fills = await hl.getUserFills();
+	const fills = await getFillsOnce();
 
 	const decodedByCoin = new Map<string, string>();
 	for (const p of toCheck) {

@@ -1,6 +1,9 @@
 import type { InvoClient } from '../clients/invo-client.js';
 import type { Logger } from '../services/logger.js';
+import { DEFAULT_MIN_CACHE_TTL_MS, type PollCacheService } from '../services/poll-cache.js';
 import type { FollowedPortfolio, OpenInvestment } from '../types.js';
+
+const FOLLOWED_PORTFOLIOS_CACHE_KEY = 'followedPortfolios';
 
 /**
  * The "consumer" side of Invo: turns the two polling endpoints
@@ -15,15 +18,25 @@ export class PortfolioPoller {
 	constructor(
 		private invo: InvoClient,
 		private log: Logger,
+		private pollCache: PollCacheService,
 	) {}
 
 	drainSlowInvoCalls() {
 		return this.invo.drainSlowCalls();
 	}
 
-	/** Fetched fresh every call; one cheap request, so a new follow/unfollow shows up on the very next poll, not some slower cadence. */
+	/**
+	 * Stale-while-revalidate, not fetched fresh every call - a follow/unfollow
+	 * is real-world-rare compared to the poll cadence, so paying for this
+	 * call every single cycle (its own ~1-1.2s baseline, per call-timing.ts)
+	 * just to catch a change that happens a few times a day was pure
+	 * overhead. A change now shows up within one cache TTL of drift instead
+	 * of on the very next poll - see poll-cache.ts.
+	 */
 	async fetchFollowedPortfolios(): Promise<FollowedPortfolio[]> {
-		const portfolios = await this.invo.getFollowedPortfolios();
+		const portfolios = await this.pollCache.getOrRefresh(FOLLOWED_PORTFOLIOS_CACHE_KEY, DEFAULT_MIN_CACHE_TTL_MS, () =>
+			this.invo.getFollowedPortfolios(),
+		);
 
 		const currentIds = new Set<string>(portfolios.map((p) => p.id));
 		const added = portfolios.filter((p) => !this.knownPortfolioIds.has(p.id));
