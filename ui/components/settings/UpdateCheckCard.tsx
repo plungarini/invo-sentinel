@@ -47,7 +47,13 @@ export default function UpdateCheckCard({
 				)}
 			</div>
 
-			{(checkState.ok || applyState.ok) && (
+			{applyState.ok && (
+				<p className="text-[13px] text-badge-amber">
+					Update requested - the daemon will restart to apply it. This page will reload automatically once it&apos;s
+					back (usually a few seconds; check the daemon directly if it takes longer than a couple of minutes).
+				</p>
+			)}
+			{checkState.ok && (
 				<p className="text-[13px] text-profit">
 					Requested - picked up on the daemon&apos;s next cycle. Refresh this page in a bit to see the result.
 				</p>

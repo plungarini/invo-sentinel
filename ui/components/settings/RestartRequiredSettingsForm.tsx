@@ -100,8 +100,8 @@ export default function RestartRequiredSettingsForm({ defaultValues }: { default
 					{state.error && <p className="text-[13px] text-loss">{state.error}</p>}
 					{state.ok && (
 						<p className="text-[13px] text-profit">
-							Saved. The daemon is restarting to apply these - back within a few seconds; open positions on the
-							exchange are unaffected.
+							Saved. The daemon is restarting to apply these - this page will reload automatically once it&apos;s
+							back (usually a few seconds); open positions on the exchange are unaffected.
 						</p>
 					)}
 				</div>
