@@ -33,10 +33,13 @@ export class StateStore {
 					marginUsd: r.margin_usd,
 					ourBaseShortId: r.our_base_short_id,
 					portfolioId: r.portfolio_id ?? undefined,
+					portfolioTitle: r.portfolio_title ?? undefined,
 					ownerUsername: r.owner_username ?? undefined,
 					entryPrice: r.entry_price ?? undefined,
 					openedAt: r.opened_at ?? undefined,
 					lastAppliedFraction: r.last_applied_fraction ?? undefined,
+					traderModeInvoBaseId: r.trader_mode_invo_base_id ?? undefined,
+					traderModeEntrySim: r.trader_mode_entry_sim ?? undefined,
 				};
 			}
 			return map;
@@ -49,8 +52,8 @@ export class StateStore {
 	save(state: PositionStateMap): void {
 		try {
 			const insert = this.db.prepare(
-				`INSERT INTO position_state (base_id, coin, is_buy, leverage, margin_usd, our_base_short_id, portfolio_id, owner_username, entry_price, opened_at, last_applied_fraction)
-				 VALUES (@baseId, @coin, @isBuy, @leverage, @marginUsd, @ourBaseShortId, @portfolioId, @ownerUsername, @entryPrice, @openedAt, @lastAppliedFraction)`,
+				`INSERT INTO position_state (base_id, coin, is_buy, leverage, margin_usd, our_base_short_id, portfolio_id, owner_username, entry_price, opened_at, last_applied_fraction, trader_mode_invo_base_id, trader_mode_entry_sim, portfolio_title)
+				 VALUES (@baseId, @coin, @isBuy, @leverage, @marginUsd, @ourBaseShortId, @portfolioId, @ownerUsername, @entryPrice, @openedAt, @lastAppliedFraction, @traderModeInvoBaseId, @traderModeEntrySim, @portfolioTitle)`,
 			);
 			const tx = this.db.transaction((s: PositionStateMap) => {
 				this.db.prepare('DELETE FROM position_state').run();
@@ -67,6 +70,9 @@ export class StateStore {
 						entryPrice: e.entryPrice ?? null,
 						openedAt: e.openedAt ?? null,
 						lastAppliedFraction: e.lastAppliedFraction ?? null,
+						traderModeInvoBaseId: e.traderModeInvoBaseId ?? null,
+						traderModeEntrySim: e.traderModeEntrySim ?? null,
+						portfolioTitle: e.portfolioTitle ?? null,
 					});
 				}
 			});

@@ -52,7 +52,7 @@ export default function TraderModeSettingsForm({ defaultValues }: { defaultValue
 						label="Caption"
 						name="caption"
 						defaultValue={defaultValues.caption}
-						placeholder="optional - posted with no caption if left blank"
+						placeholder="optional - posted with no visible caption if left blank"
 					/>
 				</div>
 			</div>

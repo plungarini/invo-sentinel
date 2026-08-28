@@ -42,7 +42,10 @@ function runMigrations(db: Database): void {
 			owner_username TEXT,
 			entry_price REAL,
 			opened_at TEXT,
-			last_applied_fraction REAL
+			last_applied_fraction REAL,
+			trader_mode_invo_base_id TEXT,
+			trader_mode_entry_sim REAL,
+			portfolio_title TEXT
 		);
 
 		CREATE TABLE IF NOT EXISTS ignored_trades (
@@ -95,6 +98,30 @@ function runMigrations(db: Database): void {
 		CREATE INDEX IF NOT EXISTS idx_closed_trades_coin ON closed_trades(coin);
 		CREATE INDEX IF NOT EXISTS idx_closed_trades_closed_at ON closed_trades(closed_at);
 	`);
+
+	// CREATE TABLE IF NOT EXISTS never adds columns to a table that already
+	// exists - these three (Trader mode, see trader-mode-sync.ts) were added
+	// after the position_state table shipped, so an already-created
+	// sentinel.db needs them backfilled here. Runs on every openDb() (i.e.
+	// every daemon start, including right after an auto-update), and is a
+	// no-op once the columns exist.
+	addColumnIfMissing(db, 'position_state', 'trader_mode_invo_base_id', 'TEXT');
+	addColumnIfMissing(db, 'position_state', 'trader_mode_entry_sim', 'REAL');
+	addColumnIfMissing(db, 'position_state', 'portfolio_title', 'TEXT');
+}
+
+/**
+ * Idempotent `ALTER TABLE ... ADD COLUMN`. SQLite has no "IF NOT EXISTS" for
+ * this, so a re-run against a DB that already has the column throws with a
+ * "duplicate column name" message - swallowed here; anything else is a real
+ * migration failure and propagates.
+ */
+function addColumnIfMissing(db: Database, table: string, column: string, type: string): void {
+	try {
+		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+	} catch (e: any) {
+		if (!/duplicate column/i.test(e?.message ?? '')) throw e;
+	}
 }
 
 /**
@@ -118,8 +145,8 @@ function importLegacyJson(db: Database, dataDir: string): void {
 
 	const state = readJson<Record<string, any>>('.copy-state.json', {});
 	const insertState = db.prepare(
-		`INSERT OR REPLACE INTO position_state (base_id, coin, is_buy, leverage, margin_usd, our_base_short_id, portfolio_id, owner_username, entry_price, opened_at, last_applied_fraction)
-		 VALUES (@baseId, @coin, @isBuy, @leverage, @marginUsd, @ourBaseShortId, @portfolioId, @ownerUsername, @entryPrice, @openedAt, @lastAppliedFraction)`,
+		`INSERT OR REPLACE INTO position_state (base_id, coin, is_buy, leverage, margin_usd, our_base_short_id, portfolio_id, owner_username, entry_price, opened_at, last_applied_fraction, trader_mode_invo_base_id, trader_mode_entry_sim, portfolio_title)
+		 VALUES (@baseId, @coin, @isBuy, @leverage, @marginUsd, @ourBaseShortId, @portfolioId, @ownerUsername, @entryPrice, @openedAt, @lastAppliedFraction, @traderModeInvoBaseId, @traderModeEntrySim, @portfolioTitle)`,
 	);
 	for (const [baseId, e] of Object.entries(state)) {
 		insertState.run({
@@ -134,6 +161,9 @@ function importLegacyJson(db: Database, dataDir: string): void {
 			entryPrice: e.entryPrice ?? null,
 			openedAt: e.openedAt ?? null,
 			lastAppliedFraction: e.lastAppliedFraction ?? null,
+			traderModeInvoBaseId: e.traderModeInvoBaseId ?? null,
+			traderModeEntrySim: e.traderModeEntrySim ?? null,
+			portfolioTitle: e.portfolioTitle ?? null,
 		});
 	}
 

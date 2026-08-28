@@ -10,6 +10,7 @@ import type { Logger } from '../services/logger.js';
 import type { PortfolioRiskStore } from '../services/portfolio-risk-store.js';
 import { resolvePortfolioRisk } from '../services/risk-policy.js';
 import type { StateStore } from '../services/state-store.js';
+import { extractSimInvestment, isTraderModeActive } from '../services/trader-mode-policy.js';
 import type { CloidAttributionCache, EmergencyConfig, FollowedPortfolio, HyperliquidPosition, IgnoredTradesMap, OpenInvestment, PortfolioRiskEntry, PositionStateMap, RiskConfig, TraderModeConfig } from '../types.js';
 import { discoverCloidAttributedCoins, type ResolvedAttribution } from './cloid-attribution.js';
 import type { PortfolioPoller } from './portfolio-poller.js';
@@ -58,6 +59,8 @@ export class Reconciler {
 		private getTraderMode: () => TraderModeConfig,
 		/** Same convention - the two emergency kill switches, re-read fresh every cycle so a settings-page flip takes effect on the next one, not just at daemon restart. */
 		private getEmergency: () => EmergencyConfig,
+		/** PositionSync/TraderModeSync each get this too and guard their own live calls; the Trader-mode orphan sweep below issues Invo `sellInvestment` calls directly from here, so it needs it as well. */
+		private dryRun: boolean,
 		private log: Logger,
 	) {}
 
@@ -354,6 +357,19 @@ export class Reconciler {
 		}
 		if (unfollowedIgnoredChanged) this.ignoredStore.save(ignored);
 
+		// Trader mode: close any paper trade left open on the mirror portfolio
+		// with no matching tracked position anymore (a mirror-close that never
+		// landed - Invo 500/timeout - leaves one, and the per-coin "already
+		// exists" error then makes it self-perpetuating). Skipped when the
+		// shared Invo budget is already exhausted this cycle - retries next one.
+		if (!rateLimitExhausted) {
+			try {
+				await this.cleanupTraderModeOrphans(state, traderMode);
+			} catch (e: any) {
+				if (!(e instanceof RateLimitExhaustedError)) this.log({ type: 'error', source: 'trader_mode_orphan_cleanup', message: e.message });
+			}
+		}
+
 		// Diagnostic-only (see INCIDENT_LOG.md 2026-08-11 latency-bump
 		// investigation): surfaces which specific outbound call was slow this
 		// cycle, if any, instead of just a slow cycle_complete duration with
@@ -439,6 +455,55 @@ export class Reconciler {
 			ignoredChanged = true;
 		}
 		if (ignoredChanged) this.ignoredStore.save(ignored);
+	}
+
+	/**
+	 * Trader mode only. Sells any still-open paper trade on the user's mirror
+	 * portfolio that no tracked position accounts for - an orphan left behind
+	 * when a mirror-close failed (Invo 500/timeout) or Trader mode was enabled
+	 * with pre-existing sims. Touches ONLY Invo sim investments via
+	 * `sellInvestment`; never Hyperliquid, never a real position. A sim whose
+	 * coin still has a tracked position is left alone (could be a mirror
+	 * mid-bootstrap whose id hasn't persisted yet).
+	 */
+	private async cleanupTraderModeOrphans(state: PositionStateMap, traderMode: TraderModeConfig): Promise<void> {
+		if (!isTraderModeActive(traderMode)) return;
+		const portfolioId = traderMode.portfolioId!;
+
+		const trackedInvoBaseIds = new Set<string>();
+		const trackedCoins = new Set<string>();
+		for (const entry of Object.values(state)) {
+			if (entry.traderModeInvoBaseId) trackedInvoBaseIds.add(entry.traderModeInvoBaseId);
+			trackedCoins.add(entry.coin);
+		}
+
+		const sims = await this.invo.getInvestmentsSims(portfolioId);
+		if (!sims.success) {
+			this.log({ type: 'trader_mode_orphan_cleanup_skipped', reason: sims.error?.msg ?? 'get_investments_sims returned success:false' });
+			return;
+		}
+
+		for (const raw of sims.investments ?? []) {
+			const sim = extractSimInvestment(raw);
+			if (!sim.baseId || sim.isOpen === false) continue;
+			if (trackedInvoBaseIds.has(sim.baseId)) continue;
+			if (sim.coin && trackedCoins.has(sim.coin)) continue;
+			if (this.dryRun) {
+				this.log({ type: 'dry_run_trader_mode_orphan_close', invoBaseId: sim.baseId, coin: sim.coin ?? null });
+				continue;
+			}
+			try {
+				const result = await this.invo.sellInvestment({ baseId: sim.baseId, customClosingPrice: null });
+				if (!result.success) {
+					this.log({ type: 'trader_mode_orphan_close_failed', invoBaseId: sim.baseId, coin: sim.coin ?? null, reason: result.error?.msg ?? 'unknown' });
+					continue;
+				}
+				this.log({ type: 'trader_mode_orphan_closed', invoBaseId: sim.baseId, coin: sim.coin ?? null, postId: result.postId ?? null });
+			} catch (e: any) {
+				if (e instanceof RateLimitExhaustedError) throw e;
+				this.log({ type: 'error', source: 'trader_mode_orphan_cleanup', invoBaseId: sim.baseId, message: e.message });
+			}
+		}
 	}
 
 	/**
