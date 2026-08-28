@@ -259,6 +259,7 @@ async function main() {
 		() => loadRiskConfig(configStore, { minMarginPct, maxMarginPct }),
 		() => loadTraderModeConfig(configStore),
 		() => loadEmergencyConfig(configStore),
+		dryRun,
 		log,
 	);
 
