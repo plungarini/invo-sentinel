@@ -10,6 +10,14 @@ import { getWizardPrefill, shouldShowSetupWizard } from "@/server/daemon/setting
 import { APP_VERSION } from "@daemon/version.js";
 import "./globals.css";
 
+// This layout renders the first-run SetupWizard based on a live DB read
+// (`shouldShowSetupWizard`). Without this, any static child route (e.g.
+// /tools) prerenders the layout at build time - on CI, where no configured
+// sentinel.db exists - and ships the wizard frozen into that route's HTML,
+// so a configured deployment still sees the wizard there. Every other route
+// already sets this per-page; the gate lives here, so it belongs here too.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
 	title: "Invo Sentinel",
 	description: "Local dashboard for the Invo copy-trading daemon.",
