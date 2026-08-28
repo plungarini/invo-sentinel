@@ -141,6 +141,12 @@ export interface AssetMeta {
 /** No genuine allMids tick should ever be silent this long; past it, isWebSocketConnected() still saying "connected" is not enough to trust the snapshot - treat it as dead and fall back to REST. */
 const LIVE_MIDS_STALE_MS = 15_000;
 
+// The SDK permanently stops reconnecting after 5 failed tries (then logs
+// "reconnect manually") - fatal for an unattended daemon on a flaky link,
+// which then runs REST-only until the whole process restarts. Its backoff
+// still caps at 30s, so a huge cap just means "retry every 30s forever".
+const WS_MAX_RECONNECT_ATTEMPTS = 1_000_000;
+
 export class HyperliquidClient {
 	private sdk: Hyperliquid | null = null;
 	private liveMids: Record<string, string> | null = null;
@@ -157,7 +163,7 @@ export class HyperliquidClient {
 	}
 
 	async connect(): Promise<void> {
-		this.sdk = new Hyperliquid({ privateKey: this.agentKey, walletAddress: this.walletAddress, enableWs: this.enableWs });
+		this.sdk = new Hyperliquid({ privateKey: this.agentKey, walletAddress: this.walletAddress, enableWs: this.enableWs, maxReconnectAttempts: WS_MAX_RECONNECT_ATTEMPTS });
 		await slowCalls.track('sdk.connect', () => withRaceTimeout(this.sdk!.connect(), HL_EXCHANGE_TIMEOUT_MS, 'sdk.connect'));
 		if (this.enableWs) {
 			// `webData2` (the one-shot "everything" feed: positions + account value)

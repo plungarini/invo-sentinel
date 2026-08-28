@@ -4,6 +4,10 @@ import PageHeader from '@/components/shared/PageHeader';
 import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 
+// Matches every sibling route page - see app/layout.tsx for why the layout's
+// setup-wizard gate must never be statically prerendered.
+export const dynamic = 'force-dynamic';
+
 const TOOLS = [
 	{
 		href: '/tools/portfolio-analysis',
