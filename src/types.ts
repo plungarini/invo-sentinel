@@ -169,7 +169,7 @@ export interface TraderModeConfig {
 	portfolioId?: string;
 	/** When true, also calls `posts/repost_investment` after every mirrored action so it appears on the user's Invo feed. */
 	autoShare: boolean;
-	/** Free-text caption for the feed repost; a sensible default is generated per action when blank. */
+	/** Free-text caption for the feed repost. Invo silently drops a repost whose caption is empty/whitespace, so a blank value here is sent as a single zero-width space instead - the post still publishes, with no visible text. */
 	caption?: string;
 }
 
