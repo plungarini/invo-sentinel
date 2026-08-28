@@ -5,6 +5,11 @@ import type { Logger } from './logger.js';
 
 const UI_PORT = 4400;
 const RESTART_DELAY_MS = 3_000;
+// A child that dies almost immediately is usually a fast fail that a 3s retry
+// just spams the log with (port still held by a not-yet-dead previous UI after
+// an update, Node missing, a bad build) - back off much harder for those.
+const FAST_FAIL_MS = 5_000;
+const FAST_FAIL_RESTART_DELAY_MS = 15_000;
 const BROWSER_OPEN_DELAY_MS = 3_000;
 const STOP_TIMEOUT_MS = 3_000;
 
@@ -62,8 +67,10 @@ export function startUiSupervisor(opts: { rootDir: string; log: Logger }): UiSup
 	let child: ChildProcess | null = null;
 	let restartTimer: NodeJS.Timeout | null = null;
 	let browserOpened = false;
+	let spawnedAt = 0;
 
 	function spawnChild(): void {
+		spawnedAt = Date.now();
 		child = spawn('node', ['server.js'], {
 			cwd: uiDir,
 			env: { ...process.env, PORT: String(UI_PORT) },
@@ -80,7 +87,8 @@ export function startUiSupervisor(opts: { rootDir: string; log: Logger }): UiSup
 			child = null;
 			if (stopping) return;
 			log({ type: 'ui_crashed', code, signal });
-			restartTimer = setTimeout(spawnChild, RESTART_DELAY_MS);
+			const delay = Date.now() - spawnedAt < FAST_FAIL_MS ? FAST_FAIL_RESTART_DELAY_MS : RESTART_DELAY_MS;
+			restartTimer = setTimeout(spawnChild, delay);
 		});
 
 		if (!browserOpened) {
@@ -101,16 +109,22 @@ export function startUiSupervisor(opts: { rootDir: string; log: Logger }): UiSup
 				return Promise.resolve();
 			}
 			return new Promise((resolve) => {
+				let done = false;
 				const finish = () => {
+					if (done) return;
+					done = true;
+					clearTimeout(sigkillTimer);
+					clearTimeout(hardCap);
 					closeSync(logFd);
 					resolve();
 				};
-				const timer = setTimeout(finish, STOP_TIMEOUT_MS);
-				current.once('exit', () => {
-					clearTimeout(timer);
-					finish();
-				});
-				current.kill();
+				current.once('exit', finish);
+				current.kill(); // SIGTERM
+				// If it hasn't exited by the timeout, SIGKILL it - a still-alive
+				// child keeps port 4400 held, which is exactly what makes the
+				// next daemon's UI spawn fail with EADDRINUSE after an update.
+				const sigkillTimer = setTimeout(() => current.kill('SIGKILL'), STOP_TIMEOUT_MS);
+				const hardCap = setTimeout(finish, STOP_TIMEOUT_MS + 1_000);
 			});
 		},
 	};

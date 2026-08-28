@@ -3,6 +3,9 @@ import PortfolioAnalysisLoader from '@/components/tools/PortfolioAnalysisLoader'
 import RowSkeleton from '@/components/wallet/RowSkeleton';
 import { Suspense } from 'react';
 
+// See app/layout.tsx: the layout's setup-wizard gate must never be statically prerendered.
+export const dynamic = 'force-dynamic';
+
 export default function PortfolioAnalysisPage() {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
