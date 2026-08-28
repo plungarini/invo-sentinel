@@ -38,13 +38,12 @@ export class TraderModeSync {
 		const equityFraction = computeEquityFraction(entry.marginUsd, equity);
 
 		if (dryRun) {
-			log({ type: 'dry_run_trader_mode_open', baseId, coin: entry.coin, portfolioId: config.portfolioId, equityFractionPct: equityFraction * 100 });
+			log({ type: 'dry_run_trader_mode_open', baseId, coin: entry.coin, portfolioId: config.portfolioId, equityFractionPct: equityFraction * 100, entrySim: computeEntrySim(equityFraction) });
 			return {};
 		}
 
 		try {
-			const sims = await invo.getInvestmentsSims(config.portfolioId!);
-			const entrySim = computeEntrySim(equityFraction, sims.portfolioRemainingSim ?? 0);
+			const entrySim = computeEntrySim(equityFraction);
 			const result = await invo.createTickerInvestment({
 				ticker: entry.coin,
 				portfolioId: config.portfolioId!,
@@ -82,13 +81,12 @@ export class TraderModeSync {
 		const equityFraction = computeEquityFraction(entry.marginUsd, equity);
 
 		if (dryRun) {
-			log({ type: 'dry_run_trader_mode_adjust', baseId, coin: entry.coin, invoBaseId: entry.traderModeInvoBaseId, equityFractionPct: equityFraction * 100 });
+			log({ type: 'dry_run_trader_mode_adjust', baseId, coin: entry.coin, invoBaseId: entry.traderModeInvoBaseId, equityFractionPct: equityFraction * 100, targetEntrySim: computeEntrySim(equityFraction), priorEntrySim: entry.traderModeEntrySim ?? 0 });
 			return {};
 		}
 
 		try {
-			const sims = await invo.getInvestmentsSims(config.portfolioId!);
-			const targetEntrySim = computeEntrySim(equityFraction, sims.portfolioRemainingSim ?? 0);
+			const targetEntrySim = computeEntrySim(equityFraction);
 			const priorEntrySim = entry.traderModeEntrySim ?? 0;
 			const simDifference = Math.abs(targetEntrySim - priorEntrySim);
 			if (simDifference < 0.0001) return {}; // dust; not worth a call
