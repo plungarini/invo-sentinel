@@ -25,3 +25,29 @@ export function computeEquityFraction(marginUsd: number, equity: number): number
 export function computeEntrySim(equityFraction: number): number {
 	return Math.max(0, equityFraction * 100);
 }
+
+export interface SimInvestmentLite {
+	baseId?: string;
+	coin?: string;
+	isOpen?: boolean;
+}
+
+/**
+ * Invo's `get_investments_sims` `investments[]` element shape is not
+ * reverse-engineered - this pulls just the fields Trader-mode's orphan
+ * cleanup (reconciler.ts) and "already exists" self-heal (trader-mode-sync.ts)
+ * need, defensively, tolerating any of the field names Invo uses for them
+ * elsewhere. `isOpen` left `undefined` when absent so callers can decide how
+ * to treat "unknown" (both current callers treat only an explicit `false` as
+ * closed).
+ */
+export function extractSimInvestment(raw: unknown): SimInvestmentLite {
+	if (!raw || typeof raw !== 'object') return {};
+	const r = raw as Record<string, unknown>;
+	const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
+	return {
+		baseId: str(r.baseId) ?? str(r.id) ?? str(r.investmentId),
+		coin: str(r.ticker) ?? str(r.coin) ?? str(r.symbol) ?? str(r.name),
+		isOpen: typeof r.isOpen === 'boolean' ? r.isOpen : undefined,
+	};
+}
