@@ -69,10 +69,15 @@ export class TraderModeSync {
 				// landed) makes every subsequent open fail like this forever -
 				// try to re-attach to that existing sim instead of giving up.
 				if (/already exists/i.test(reason)) {
-					const recoveredBaseId = await this.recoverExistingMirror(entry.coin, config);
-					if (recoveredBaseId) {
-						log({ type: 'trader_mode_mirror_open_recovered', baseId, coin: entry.coin, invoBaseId: recoveredBaseId, entrySim });
-						return { traderModeInvoBaseId: recoveredBaseId, traderModeEntrySim: entrySim };
+					const recovered = await this.recoverExistingMirror(entry.coin, config);
+					if (recovered) {
+						// The orphan's real size is whatever was left over from
+						// whatever it was before - not the size we just tried
+						// to open with. Trusting `entrySim` here would silently
+						// mislabel this baseline exactly like the bug this same
+						// resync pattern fixes elsewhere in this file.
+						log({ type: 'trader_mode_mirror_open_recovered', baseId, coin: entry.coin, invoBaseId: recovered.baseId, requestedEntrySim: entrySim, realEntrySim: recovered.entrySim });
+						return { traderModeInvoBaseId: recovered.baseId, traderModeEntrySim: recovered.entrySim ?? entrySim };
 					}
 				}
 				log({ type: 'trader_mode_mirror_failed', action: 'open', baseId, coin: entry.coin, entrySim, reason });
@@ -108,9 +113,31 @@ export class TraderModeSync {
 
 		try {
 			const targetEntrySim = computeEntrySim(equityFraction);
-			const priorEntrySim = entry.traderModeEntrySim ?? 0;
+			// A prior modify can silently apply a different amount than
+			// requested even on `success: true` (confirmed live 2026-08-31:
+			// our own tracked value read 1.16%, Invo's real ledger read
+			// 1.43% for the same open position) - resyncing against Invo's
+			// own ledger here is what the real-HL-position resync
+			// (position-sync.ts) already does for the exact same reason.
+			// Falls back to our own tracked value only when the read fails,
+			// so a transient API error doesn't block the resize itself.
+			const realEntrySim = await this.fetchRealEntrySim(entry.traderModeInvoBaseId, config);
+			const priorEntrySim = realEntrySim ?? entry.traderModeEntrySim ?? 0;
+			if (realEntrySim != null && Math.abs(realEntrySim - (entry.traderModeEntrySim ?? 0)) >= 0.01) {
+				log({
+					type: 'trader_mode_resynced',
+					baseId,
+					coin: entry.coin,
+					invoBaseId: entry.traderModeInvoBaseId,
+					trackedEntrySim: entry.traderModeEntrySim ?? 0,
+					realEntrySim,
+				});
+			}
 			const simDifference = Math.abs(targetEntrySim - priorEntrySim);
-			if (simDifference < 0.0001) return {}; // dust; not worth a call
+			// Dust: no modify call needed, but still persist a resync learned
+			// above so our own bookkeeping doesn't keep drifting from Invo's
+			// real ledger just because no order happened to trigger a fix this cycle.
+			if (simDifference < 0.0001) return realEntrySim != null ? { traderModeEntrySim: realEntrySim } : {};
 			const simIncrease = targetEntrySim > priorEntrySim;
 			const result = await invo.modifyTickerInvestment({
 				baseId: entry.traderModeInvoBaseId,
@@ -133,7 +160,10 @@ export class TraderModeSync {
 				// undocumented minimum-modify threshold can be learned from real
 				// prod rejections.
 				log({ type: 'trader_mode_mirror_failed', action: 'modify', baseId, coin: entry.coin, simDifference, simIncrease, targetEntrySim, priorEntrySim, reason: result.error?.msg ?? 'unknown' });
-				return {};
+				// The modify itself failed, but the resync read above is
+				// still true and worth keeping - next cycle's delta should be
+				// computed from Invo's real ledger, not from a stale value.
+				return realEntrySim != null ? { traderModeEntrySim: realEntrySim } : {};
 			}
 			log({ type: 'trader_mode_mirrored', action: 'modify', baseId, coin: entry.coin, invoBaseId: entry.traderModeInvoBaseId, simDifference, simIncrease, postId: result.postId ?? null });
 			if (config.autoShare) await this.repost(baseId, entry.traderModeInvoBaseId, config, true);
@@ -178,11 +208,11 @@ export class TraderModeSync {
 
 	/**
 	 * `ticker/create` came back "already exists" - find the open sim on this
-	 * coin to re-attach to. Only returns an id when EXACTLY ONE open sim
+	 * coin to re-attach to. Only returns a match when EXACTLY ONE open sim
 	 * matches the coin; anything ambiguous is logged and left for the manual
 	 * path / next cycle rather than guessed at.
 	 */
-	private async recoverExistingMirror(coin: string, config: TraderModeConfig): Promise<string | undefined> {
+	private async recoverExistingMirror(coin: string, config: TraderModeConfig): Promise<{ baseId: string; entrySim?: number } | undefined> {
 		const { invo, log } = this.opts;
 		try {
 			const sims = await invo.getInvestmentsSims(config.portfolioId!);
@@ -190,11 +220,25 @@ export class TraderModeSync {
 			const matches = (sims.investments ?? [])
 				.map(extractSimInvestment)
 				.filter((s) => s.baseId && s.isOpen !== false && s.coin === coin);
-			if (matches.length === 1) return matches[0].baseId;
+			if (matches.length === 1) return { baseId: matches[0].baseId!, entrySim: matches[0].entrySim };
 			log({ type: 'trader_mode_mirror_open_conflict_unresolved', coin, candidateCount: matches.length });
 			return undefined;
 		} catch (e: any) {
 			log({ type: 'error', source: 'trader_mode_recover_mirror', coin, message: e.message });
+			return undefined;
+		}
+	}
+
+	/** Reads back Invo's own ledger value for one mirrored sim - the resize path has no other way to know if a prior `modify` actually applied what was requested. */
+	private async fetchRealEntrySim(invoBaseId: string, config: TraderModeConfig): Promise<number | undefined> {
+		const { invo, log } = this.opts;
+		try {
+			const sims = await invo.getInvestmentsSims(config.portfolioId!);
+			if (!sims.success) return undefined;
+			const match = (sims.investments ?? []).map(extractSimInvestment).find((s) => s.baseId === invoBaseId);
+			return match?.entrySim;
+		} catch (e: any) {
+			log({ type: 'error', source: 'trader_mode_fetch_real_entry_sim', invoBaseId, message: e.message });
 			return undefined;
 		}
 	}

@@ -30,16 +30,22 @@ export interface SimInvestmentLite {
 	baseId?: string;
 	coin?: string;
 	isOpen?: boolean;
+	/** Invo's own cumulative ledger value for this sim - the ground truth to resync our own `traderModeEntrySim` against, since a modify's `simDifference` is not guaranteed to land exactly as requested (see trader-mode-sync.ts). */
+	entrySim?: number;
 }
 
 /**
  * Invo's `get_investments_sims` `investments[]` element shape is not
  * reverse-engineered - this pulls just the fields Trader-mode's orphan
- * cleanup (reconciler.ts) and "already exists" self-heal (trader-mode-sync.ts)
- * need, defensively, tolerating any of the field names Invo uses for them
- * elsewhere. `isOpen` left `undefined` when absent so callers can decide how
- * to treat "unknown" (both current callers treat only an explicit `false` as
- * closed).
+ * cleanup (reconciler.ts), "already exists" self-heal, and resize resync
+ * (trader-mode-sync.ts) need, defensively, tolerating any of the field names
+ * Invo uses for them elsewhere. `isOpen` left `undefined` when absent so
+ * callers can decide how to treat "unknown" (both current callers treat only
+ * an explicit `false` as closed). Confirmed live 2026-08-31 against a real
+ * response: `{baseId, ticker, lastSim, leverage, directionLong, entryPrice,
+ * entrySim, feeSim}` - mapped from Invo's own `entrySim` field (not
+ * `lastSim`, which decays over time via `feeSim` and is not the sizing basis
+ * we control).
  */
 export function extractSimInvestment(raw: unknown): SimInvestmentLite {
 	if (!raw || typeof raw !== 'object') return {};
@@ -49,5 +55,6 @@ export function extractSimInvestment(raw: unknown): SimInvestmentLite {
 		baseId: str(r.baseId) ?? str(r.id) ?? str(r.investmentId),
 		coin: str(r.ticker) ?? str(r.coin) ?? str(r.symbol) ?? str(r.name),
 		isOpen: typeof r.isOpen === 'boolean' ? r.isOpen : undefined,
+		entrySim: typeof r.entrySim === 'number' ? r.entrySim : undefined,
 	};
 }
