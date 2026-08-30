@@ -1,5 +1,10 @@
 export function formatUsd(n: number): string {
-	return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+	const abs = Math.abs(n);
+	// Sub-$1 prices (e.g. a memecoin like PUMP at $0.004634) need more than 2
+	// decimals or they render as a misleading "$0.00" - scale precision down
+	// as the value gets smaller, capped so it never runs unbounded.
+	const maximumFractionDigits = abs > 0 && abs < 1 ? Math.min(8, Math.max(2, 2 - Math.floor(Math.log10(abs)))) : 2;
+	return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits });
 }
 
 export function formatPct(n: number): string {

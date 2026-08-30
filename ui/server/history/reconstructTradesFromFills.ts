@@ -95,6 +95,37 @@ export function reconstructClosedTradesFromFills(fills: HyperliquidFill[]): Fill
 				pnlUsd += parseFloat(f.closedPnl || "0");
 				closedAtMs = f.time;
 				if (f.liquidationMarkPx != null) isLiquidated = true;
+			} else if (f.dir === "Long > Short" || f.dir === "Short > Long") {
+				// HL nets a full direction flip into ONE fill rather than a
+				// separate close+open pair - previously fell into the `else`
+				// branch below and was silently skipped entirely, which left
+				// openSize/closedSize permanently out of sync with the real
+				// (now-flat) position and meant the flush condition below could
+				// never be satisfied again for this coin - every later cycle,
+				// including fully-closed ones, silently vanished from history
+				// (confirmed live 2026-08-31: a real PUMP trade closed cleanly
+				// on the exchange 13 days after an untracked flip fill, yet
+				// never appeared here at all). Split it into closing whatever
+				// was open (`startPosition`, HL's own pre-fill size) and, if
+				// this fill's size exceeds that, opening the remainder fresh.
+				const startPos = parseFloat((f.startPosition as string) ?? "0") || 0;
+				const closingSz = Math.min(Math.abs(startPos), sz);
+				if (isBuy === undefined) isBuy = startPos > 0;
+				closedSize += closingSz;
+				closeNotional += closingSz * px;
+				pnlUsd += parseFloat(f.closedPnl || "0");
+				closedAtMs = f.time;
+				if (f.liquidationMarkPx != null) isLiquidated = true;
+				flush();
+
+				const remainder = sz - closingSz;
+				if (remainder > 1e-9) {
+					openedAtMs = f.time;
+					isBuy = f.dir === "Short > Long";
+					openNotional = remainder * px;
+					openSize = remainder;
+				}
+				continue;
 			} else {
 				continue;
 			}

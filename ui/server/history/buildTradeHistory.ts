@@ -108,6 +108,13 @@ export function buildTradeHistory(args: BuildTradeHistoryArgs): TradeHistoryEntr
 	for (const [baseId, events] of eventsByBaseId) {
 		if (events.some((e) => e.type === "opened" || e.type === "auto_adopted")) allBaseIds.add(baseId);
 	}
+	// closedTradesByBaseId is the ONE source that survives log rotation
+	// (LOG_RETENTION_HOURS) - without this, a closed trade whose own
+	// "opened"/"auto_adopted" log line has already rotated out never enters
+	// `allBaseIds` at all, so its durable record below is never consulted and
+	// the trade falls through to the fills-only "Unattributed" reconstruction
+	// even though its trader/portfolio/prices are fully known here.
+	for (const baseId of closedTradesByBaseId.keys()) allBaseIds.add(baseId);
 
 	// Ground truth for "what actually closed" comes from HL's own fills, not
 	// our local logs (which may be empty/rotated/never-populated for a given
