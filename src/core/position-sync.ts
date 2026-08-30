@@ -596,41 +596,18 @@ export class PositionSync {
 			return;
 		}
 
-		let ourBaseShortId = entry.ourBaseShortId;
-		let invoResult: any = null;
-
-		if (wasNewPosition) {
-			// recordClose's `baseShortId` is confirmed <=10 characters (live
-			// evidence: sending recordOpen's server-assigned UUID got a 400
-			// "Too big: expected string to have <=10 characters" - ruling that
-			// out definitively). A client-generated 10-char id was tried first
-			// and got 404 NOT_FOUND (right format, but Invo never learned that
-			// specific value - recordOpen's schema hard-rejects a client-
-			// supplied baseShortId outright). The trader's OWN
-			// investment.baseShortId is the one remaining 10-char-format
-			// candidate available, and it's exactly what Invo's own
-			// /dex/trade mimic-tracking is keyed by - next best-evidenced
-			// guess, not yet confirmed either way.
-			ourBaseShortId = investment.baseShortId;
-			try {
-				invoResult = await invo.recordOpen({
-					clientTxId: randomUUID(),
-					coin,
-					assetIndex: this.assetIndexByCoin[coin],
-					entry: { side: isBuy ? 'long' : 'short', marginMode: 'isolated', leverage, tpPx: null, slPx: null },
-					submission: { hlOrder: orderResult, nonceMs: Date.now(), hlResponse: orderResult },
-					summary: { qtyBefore: '0', qtyAfter: deltaSize.toString(), intendedLeverage: leverage },
-					mimicMeta: {
-						portfolioId: investment.portfolio?.id ?? randomUUID(),
-						creatorInvoUserId: investment.owner?.id ?? randomUUID(),
-						initialSourcePaperUpdateId: baseId,
-						sourcePaperTradeBaseId: baseId,
-					},
-				});
-			} catch (e: any) {
-				invoResult = { error: e.message };
-			}
-		}
+		// recordClose's `baseShortId` is confirmed <=10 characters (live
+		// evidence: sending recordOpen's server-assigned UUID got a 400
+		// "Too big: expected string to have <=10 characters" - ruling that
+		// out definitively). A client-generated 10-char id was tried first
+		// and got 404 NOT_FOUND (right format, but Invo never learned that
+		// specific value - recordOpen's schema hard-rejects a client-
+		// supplied baseShortId outright). The trader's OWN
+		// investment.baseShortId is the one remaining 10-char-format
+		// candidate available, and it's exactly what Invo's own
+		// /dex/trade mimic-tracking is keyed by - next best-evidenced
+		// guess, not yet confirmed either way.
+		const ourBaseShortId = wasNewPosition ? investment.baseShortId : entry.ourBaseShortId;
 
 		state[baseId] = {
 			coin,
@@ -648,12 +625,40 @@ export class PositionSync {
 			traderModeEntrySim: entry.traderModeEntrySim,
 		};
 
+		// Invo's own mimic-tracking call and the Trader-mode mirror are
+		// mutually independent - neither reads the other's result - so
+		// they're fired concurrently rather than one after the other. This
+		// only shortens the gap between the real fill and the mirrored
+		// paper trade; it can't close it entirely, since the mirror still
+		// has to wait for `state[baseId]`/`finalMarginUsd` above, which in
+		// turn requires the real order to have already filled.
+		const recordOpenPromise: Promise<any> = wasNewPosition
+			? invo
+					.recordOpen({
+						clientTxId: randomUUID(),
+						coin,
+						assetIndex: this.assetIndexByCoin[coin],
+						entry: { side: isBuy ? 'long' : 'short', marginMode: 'isolated', leverage, tpPx: null, slPx: null },
+						submission: { hlOrder: orderResult, nonceMs: Date.now(), hlResponse: orderResult },
+						summary: { qtyBefore: '0', qtyAfter: deltaSize.toString(), intendedLeverage: leverage },
+						mimicMeta: {
+							portfolioId: investment.portfolio?.id ?? randomUUID(),
+							creatorInvoUserId: investment.owner?.id ?? randomUUID(),
+							initialSourcePaperUpdateId: baseId,
+							sourcePaperTradeBaseId: baseId,
+						},
+					})
+					.catch((e: any) => ({ error: e.message }))
+			: Promise.resolve(null);
+
 		// Best-effort mirror onto the Trader-mode Invo portfolio, if enabled -
 		// never affects the real order/state above, which has already fully
 		// committed by this point.
-		const traderModeResult = wasNewPosition
-			? await traderModeSync.mirrorOpen(baseId, state[baseId], traderMode, equity, leverage)
-			: await traderModeSync.mirrorAdjust(baseId, state[baseId], traderMode, equity);
+		const traderModePromise = wasNewPosition
+			? traderModeSync.mirrorOpen(baseId, state[baseId], traderMode, equity, leverage)
+			: traderModeSync.mirrorAdjust(baseId, state[baseId], traderMode, equity);
+
+		const [invoResult, traderModeResult] = await Promise.all([recordOpenPromise, traderModePromise]);
 		if (traderModeResult.traderModeInvoBaseId) state[baseId].traderModeInvoBaseId = traderModeResult.traderModeInvoBaseId;
 		if (traderModeResult.traderModeEntrySim != null) state[baseId].traderModeEntrySim = traderModeResult.traderModeEntrySim;
 
