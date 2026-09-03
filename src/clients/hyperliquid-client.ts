@@ -5,8 +5,10 @@ import type { HyperliquidFill, HyperliquidLedgerUpdate, HyperliquidPosition } fr
 
 const slowCalls = new SlowCallTracker('hyperliquid');
 
-// Required on every order for Invo compatibility.
-const INVO_BUILDER = { address: '0x557edb253b1d7ed5f15b248a5a3fd919fa5d3c81', fee: 35 };
+// The 'builder' fee param (Invo's address, 3.5bps) was removed 2026-09
+// (hotfix/1.18.1): verified live that Hyperliquid accepts orders fine
+// without it and the resulting trade still shows up correctly in Invo's
+// own app - it was never required for Invo compatibility, just an extra fee.
 
 // The SDK's SymbolConversion layer expects "SOL-PERP"; the raw /info REST
 // endpoints (meta, allMids, clearinghouseState) use bare "SOL".
@@ -332,7 +334,6 @@ export class HyperliquidClient {
 					order_type: { limit: { tif: 'Ioc' } },
 					reduce_only: false,
 					grouping: 'na',
-					builder: INVO_BUILDER,
 				}),
 				HL_EXCHANGE_TIMEOUT_MS,
 				'placeOrder',
